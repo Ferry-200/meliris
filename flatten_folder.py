@@ -45,8 +45,8 @@ def _propose_name(src: Path, dest_dir: Path) -> Path:
     初始扁平化命名策略：`<上一级文件夹>__<文件名><后缀>`。
     例如：AlbumA/01.mp3 → music/AlbumA__01.mp3
     """
-    parent = src.parent.name or "root"
-    name = f"{parent}__{src.stem}{src.suffix}"
+    # parent = src.parent.name or "root"
+    name = f"{src.stem}{src.suffix}"
     return dest_dir / name
 
 
@@ -55,7 +55,7 @@ def _resolve_collision(src: Path, dest: Path) -> Tuple[Path, bool]:
     解决命名冲突：
     - 若已存在且内容相同（尺寸和哈希一致），返回现有路径并标记为重复（跳过）。
     - 若内容不同，使用源文件哈希的前 8 位作为后缀重命名：
-      e.g. AlbumA__01.mp3 → AlbumA__01.1a2b3c4d.mp3
+      e.g. 01.mp3 → 01-1a2b3c4d.mp3
     返回：(最终目标路径, 是否重复文件)。
     """
     if not dest.exists():
@@ -72,12 +72,12 @@ def _resolve_collision(src: Path, dest: Path) -> Tuple[Path, bool]:
 
     # 内容不同，基于哈希后缀重命名
     short = _file_hash(src)[:8]
-    renamed = dest.with_name(f"{dest.stem}.{short}{dest.suffix}")
+    renamed = dest.with_name(f"{dest.stem}-{short}{dest.suffix}")
     if renamed.exists():
         # 极端情况：再加数字后缀
         idx = 2
         while True:
-            candidate = dest.with_name(f"{dest.stem}.{short}.{idx}{dest.suffix}")
+            candidate = dest.with_name(f"{dest.stem}-{short}-{idx}{dest.suffix}")
             if not candidate.exists():
                 renamed = candidate
                 break
