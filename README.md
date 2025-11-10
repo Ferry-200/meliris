@@ -50,7 +50,7 @@ CNN 提供高层局部特征，LSTM 建立时间关系，
  ↓
 特征展平 (Flatten)
  ↓
-LSTM 层（BiLSTM 或 LSTM）
+LSTM 层
  ↓
 时间分布全连接层（TimeDistributed Dense）
  ↓
