@@ -39,25 +39,36 @@ AUDIO_EXTS_ORDER = [
 def format_time_ms(sec: float) -> str:
     m = int(sec // 60)
     s = sec - m * 60
-    # 显示为 mm:ss.mmm（三位毫秒）
     return f"{m:02d}:{s:06.3f}"
 
 
-class LSTMSVD(nn.Module):
-    def __init__(self, input_dim: int, hidden: int = 128, sequential_head: bool = False):
+class CNNLSTM(nn.Module):
+    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128):
         super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(1, 32, kernel_size=5, padding=2),
+            nn.BatchNorm1d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(32, cnn_channels, kernel_size=5, padding=2),
+            nn.BatchNorm1d(cnn_channels),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool1d(1),
+        )
         self.lstm = nn.LSTM(
-            input_size=input_dim,
+            input_size=cnn_channels,
             hidden_size=hidden,
             num_layers=1,
             batch_first=True,
             bidirectional=False,
         )
-        # 兼容训练时的定义：有的保存为 head.0.*（Sequential 包裹），有的为 head.*（Linear）
-        self.head = nn.Sequential(nn.Linear(hidden, 1)) if sequential_head else nn.Linear(hidden, 1)
+        self.head = nn.Linear(hidden, 1)
 
     def forward(self, X: torch.Tensor):
-        out, _ = self.lstm(X)
+        B, T, F = X.shape
+        x = X.reshape(B * T, 1, F)
+        x = self.cnn(x).squeeze(-1)
+        x = x.reshape(B, T, -1)
+        out, _ = self.lstm(x)
         logits = self.head(out).squeeze(-1)
         return logits
 
@@ -65,32 +76,8 @@ class LSTMSVD(nn.Module):
 def load_model(ckpt_path: Path):
     ckpt = torch.load(str(ckpt_path), map_location="cpu")
     state = ckpt.get("model_state", ckpt)
-    keys = list(state.keys())
-    # 检测 head 键名风格
-    seq_head = any(k.startswith("head.0.") for k in keys)
-    model = LSTMSVD(input_dim=N_MELS, hidden=128, sequential_head=seq_head)
-    try:
-        model.load_state_dict(state)
-    except RuntimeError:
-        # 尝试重映射键名并切换 head 风格
-        remapped = {}
-        if seq_head:
-            # 训练保存为 head.0.*，当前模型为 Sequential 仍报错，则尝试映射为 head.*
-            for k, v in state.items():
-                if k.startswith("head.0."):
-                    remapped[k.replace("head.0.", "head.")] = v
-                else:
-                    remapped[k] = v
-            model = LSTMSVD(input_dim=N_MELS, hidden=128, sequential_head=False)
-        else:
-            # 训练保存为 head.*，当前模型为 Linear 仍报错，则尝试映射为 head.0.*
-            for k, v in state.items():
-                if k.startswith("head."):
-                    remapped[k.replace("head.", "head.0.")] = v
-                else:
-                    remapped[k] = v
-            model = LSTMSVD(input_dim=N_MELS, hidden=128, sequential_head=True)
-        model.load_state_dict(remapped, strict=False)
+    model = CNNLSTM(input_dim=N_MELS, cnn_channels=64, hidden=128)
+    model.load_state_dict(state, strict=False)
     model.eval()
     config = ckpt.get("config", {})
     return model, config
@@ -108,7 +95,7 @@ def load_mel(audio_path: Path) -> np.ndarray:
     )
     S_db = librosa.power_to_db(S, ref=np.max)
     S_norm = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-8)
-    return S_norm.T.astype(np.float32)  # [T, n_mels]
+    return S_norm.T.astype(np.float32)
 
 
 def labels_to_frame_targets(labels: List[Dict], T: int) -> np.ndarray:
@@ -127,9 +114,9 @@ def labels_to_frame_targets(labels: List[Dict], T: int) -> np.ndarray:
     return y
 
 
-def run_infer(model: LSTMSVD, X: np.ndarray) -> np.ndarray:
+def run_infer(model: CNNLSTM, X: np.ndarray) -> np.ndarray:
     with torch.no_grad():
-        logits = model(torch.from_numpy(X).unsqueeze(0))  # [1, T, F] -> [1, T]
+        logits = model(torch.from_numpy(X).unsqueeze(0))
         probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
     return probs.astype(np.float32)
 
@@ -146,11 +133,11 @@ def find_candidates(music_root: Path, labels_root: Path) -> List[Path]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Matplotlib 推理可视化：不在 labels/perfect 下的音频，与 labels 对照")
+    parser = argparse.ArgumentParser(description="CNN+LSTM 推理可视化：不在 labels/perfect 下的音频，与 labels 对照")
     parser.add_argument("--music-root", default=r"D:\meliris\music", help="音乐目录")
     parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent.parent / "labels"), help="标签目录")
     parser.add_argument("--stem", default=None, help="指定文件名 stem（不含扩展名）")
-    parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent.parent / "lstm_svd_inst.pt"), help="模型权重路径")
+    parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent.parent / "cnn_lstm_inst.pt"), help="模型权重路径")
     args = parser.parse_args()
 
     music_root = Path(args.music_root)
@@ -162,7 +149,6 @@ def main():
         print("未找到候选音频（不在 labels/perfect 下的同名文件）。")
         return
 
-    # 选择文件
     audio_path: Optional[Path] = None
     if args.stem:
         for p in candidates:
@@ -177,16 +163,14 @@ def main():
     stem = audio_path.stem
     print(f"目标音频: {audio_path}")
 
-    # 加载模型与特征
     if not ckpt_path.exists():
         print(f"未找到模型权重：{ckpt_path}")
         return
     model, config = load_model(ckpt_path)
-    X = load_mel(audio_path)  # [T, F]
+    X = load_mel(audio_path)
     T = X.shape[0]
     times = np.arange(T) * HOP_SEC
 
-    # 读取标签（labels/<stem>.json，用于对照）
     label_json_path = labels_root / f"{stem}.json"
     labels = None
     if label_json_path.exists():
@@ -197,17 +181,13 @@ def main():
     y_true = labels_to_frame_targets(labels or [], T)
     has_label = labels is not None
 
-    # 推理：根据训练模式决定概率解释
     probs = run_infer(model, X)
     mode = str(config.get("mode", "vocal"))
     inst_probs = probs if mode == "instrumental" else (1.0 - probs)
     inst_label = (1.0 - y_true) if has_label else np.zeros((T,), dtype=np.float32)
-    # 默认阈值：若权重包含 eval_threshold，则使用该值作为初始阈值
-    # default_th = float(config.get("eval_threshold", 0.5))
-    # default_th = float(np.clip(default_th, 0.0, 1.0))
+
     inst_pred = (inst_probs >= 0.5).astype(np.float32)
 
-    # 计算指标
     def metrics(pred: np.ndarray, true: np.ndarray):
         tp = int(((pred == 1) & (true == 1)).sum())
         fp = int(((pred == 1) & (true == 0)).sum())
@@ -219,9 +199,7 @@ def main():
 
     p, r, f1 = metrics(inst_pred, inst_label)
 
-    # 绘图
     fig, ax = plt.subplots(figsize=(12, 5))
-    # 为多个控件与下方标题预留空间
     plt.subplots_adjust(bottom=0.39)
     label_prob = "inst_prob (model p)" if mode == "instrumental" else "inst_prob (1 - vocal_p)"
     line_inst_prob, = ax.plot(times, inst_probs, label=label_prob)
@@ -233,18 +211,14 @@ def main():
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper right")
 
-    # 横坐标按 mm:ss.mmm 展示
     ax.xaxis.set_major_formatter(FuncFormatter(lambda t, pos: format_time_ms(t)))
     ax.format_coord = lambda x, y: f"t={format_time_ms(x)}, value={y:.3f}"
 
     txt = ax.text(0.01, 1.02, f"Precision: {p:.3f}  |  Recall: {r:.3f}  |  F1: {f1:.3f}", transform=ax.transAxes)
 
-    # 阈值滑块
-    # 阈值滑块（单阈值）
     ax_th = plt.axes([0.15, 0.12, 0.7, 0.03])
     s_th = Slider(ax_th, "threshold", 0.0, 1.0, valinit=0.5, valstep=0.01)
 
-    # 迟滞（th_on/th_off）初始值与开关（若权重包含则读取），并依据 eval_postproc 默认启用
     on_init = config.get("eval_hyst_on", None)
     off_init = config.get("eval_hyst_off", None)
     postproc = str(config.get("eval_postproc", "threshold"))
@@ -254,7 +228,6 @@ def main():
     th_on0 = float(on_init) if isinstance(on_init, (int, float)) else 0.5
     th_off0 = float(off_init) if isinstance(off_init, (int, float)) else max(0.0, 0.5 - 0.2)
 
-    # 迟滞滑块与开关
     ax_on = plt.axes([0.15, 0.07, 0.32, 0.03])
     ax_off = plt.axes([0.53, 0.07, 0.32, 0.03])
     s_on = Slider(ax_on, "th_on", 0.0, 1.0, valinit=th_on0, valstep=0.01)
@@ -273,13 +246,11 @@ def main():
             pred[i] = state
         return pred
 
-    # 统一更新函数：根据当前模式（单阈值或迟滞）更新曲线与指标
     current_pred = inst_pred.copy()
     def recompute_and_update():
         nonlocal current_pred
         if use_hyst and (s_on.val > s_off.val):
             pred = apply_hysteresis(inst_probs, float(s_on.val), float(s_off.val))
-            # 曲线标签提示迟滞已启用
             line_inst_pred.set_label("inst_pred_hyst")
         else:
             pred = (inst_probs >= float(s_th.val)).astype(np.float32)
@@ -292,7 +263,6 @@ def main():
         fig.canvas.draw_idle()
 
     def on_th_change(val):
-        # 单阈值模式下生效；迟滞模式下忽略
         recompute_and_update()
 
     def on_on_change(val):
@@ -311,13 +281,10 @@ def main():
     s_off.on_changed(on_off_change)
     chk.on_clicked(on_chk_clicked)
 
-    # 图表下方显示音乐名（居中），替代顶部标题
     title_text = fig.text(0.5, 0.25, f"{stem}", ha="center", va="top")
 
-    # 初始化一次
     recompute_and_update()
 
-    # 交互：选择音频（Prev/Next/Browse/Stem 输入）
     current_idx = 0
     for i, p in enumerate(candidates):
         if p == audio_path:
@@ -329,11 +296,9 @@ def main():
         audio_path = new_audio
         stem = audio_path.stem
         print(f"切换音频: {audio_path}")
-        # 重新加载特征
         X = load_mel(audio_path)
         T = X.shape[0]
         times = np.arange(T) * HOP_SEC
-        # 重新加载标签
         label_json_path2 = labels_root / f"{stem}.json"
         labels = None
         if label_json_path2.exists():
@@ -343,11 +308,9 @@ def main():
                 labels = None
         y_true = labels_to_frame_targets(labels or [], T)
         has_label = labels is not None
-        # 推理并解释为间奏概率
         probs2 = run_infer(model, X)
         inst_probs = probs2 if mode == "instrumental" else (1.0 - probs2)
         inst_label = (1.0 - y_true) if has_label else np.zeros((T,), dtype=np.float32)
-        # 更新曲线与坐标范围
         line_inst_prob.set_xdata(times)
         line_inst_prob.set_ydata(inst_probs)
         line_inst_true.set_xdata(times)
@@ -356,10 +319,8 @@ def main():
         ax.set_xlim(times[0], times[-1] if len(times) > 0 else 1.0)
         title_text.set_text(f"{stem}")
         ann.set_visible(False)
-        # 依当前模式/阈值重新计算预测与指标
         recompute_and_update()
 
-    # Prev / Next 按钮
     ax_prev = plt.axes([0.15, 0.02, 0.08, 0.04])
     ax_next = plt.axes([0.25, 0.02, 0.08, 0.04])
     btn_prev = Button(ax_prev, "Prev")
@@ -382,7 +343,6 @@ def main():
     btn_prev.on_clicked(on_prev)
     btn_next.on_clicked(on_next)
 
-    # 鼠标移动显示时间与预测值（最近帧）
     ann = ax.annotate(
         "",
         xy=(0, 0),
@@ -402,7 +362,6 @@ def main():
         t = times[idx]
         val = float(inst_probs[idx])
         lab = int(inst_label[idx]) if has_label else 0
-        # 使用当前模式下的二值结果
         bin_pred = int(current_pred[idx])
         ann.xy = (t, val)
         ann.set_text(f"{format_time_ms(t)} | pred={val:.3f} | label={lab} | bin={bin_pred}")
@@ -411,7 +370,6 @@ def main():
 
     fig.canvas.mpl_connect("motion_notify_event", on_move)
 
-    # 顶部标题移除，使用底部标题
     plt.show()
 
 
