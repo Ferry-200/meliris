@@ -4,6 +4,6 @@
 - 训练：python -m cnn_lstm.train
 - 推理可视化：python -m cnn_lstm.infer_plot
 """
-
-from .train import main as train_main  # noqa: F401
-from .infer_plot import main as visualize_main  # noqa: F401
+# 注意：避免在包初始化时导入子模块（train/infer_plot），
+# 以免使用 `python -m cnn_lstm.train` 时出现 runpy RuntimeWarning。
+__all__ = []

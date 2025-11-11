@@ -15,26 +15,12 @@ from matplotlib.widgets import Slider, CheckButtons
 import matplotlib as mpl
 from matplotlib.widgets import Button, TextBox
 from matplotlib.ticker import FuncFormatter
+from common.config import SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC
+from common.data import load_mel, labels_to_frame_targets
+from common.postproc import compute_metrics_from_arrays, apply_hysteresis_seq
 
 
-# 与训练保持一致的特征参数
-SR = 22050
-N_MELS = 64
-N_FFT = 2048
-HOP_LENGTH = 512
-HOP_SEC = HOP_LENGTH / SR
-
-# 支持的音频扩展名（用于浏览/按 stem 查找）
-AUDIO_EXTS_ORDER = [
-    ".flac",
-    ".wav",
-    ".m4a",
-    ".mp3",
-    ".ogg",
-    ".opus",
-    ".aac",
-    ".wma",
-]
+# 与训练保持一致的特征参数从 common.config 读取
 
 def format_time_ms(sec: float) -> str:
     m = int(sec // 60)
@@ -81,37 +67,6 @@ def load_model(ckpt_path: Path):
     model.eval()
     config = ckpt.get("config", {})
     return model, config
-
-
-def load_mel(audio_path: Path) -> np.ndarray:
-    y, sr = librosa.load(str(audio_path), sr=SR, mono=True)
-    S = librosa.feature.melspectrogram(
-        y=y,
-        sr=sr,
-        n_fft=N_FFT,
-        hop_length=HOP_LENGTH,
-        n_mels=N_MELS,
-        power=2.0,
-    )
-    S_db = librosa.power_to_db(S, ref=np.max)
-    S_norm = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-8)
-    return S_norm.T.astype(np.float32)
-
-
-def labels_to_frame_targets(labels: List[Dict], T: int) -> np.ndarray:
-    y = np.zeros((T,), dtype=np.float32)
-    if not labels:
-        return y
-    for item in labels:
-        start_m, start_s = item["start"][0], item["start"][1]
-        end_m, end_s = item["end"][0], item["end"][1]
-        start_sec = start_m * 60.0 + float(start_s)
-        end_sec = end_m * 60.0 + float(end_s)
-        s_idx = max(0, int(math.floor(start_sec / HOP_SEC)))
-        e_idx = min(T, int(math.ceil(end_sec / HOP_SEC)))
-        if e_idx > s_idx:
-            y[s_idx:e_idx] = 1.0
-    return y
 
 
 def run_infer(model: CNNLSTM, X: np.ndarray) -> np.ndarray:
@@ -187,17 +142,8 @@ def main():
     inst_label = (1.0 - y_true) if has_label else np.zeros((T,), dtype=np.float32)
 
     inst_pred = (inst_probs >= 0.5).astype(np.float32)
-
-    def metrics(pred: np.ndarray, true: np.ndarray):
-        tp = int(((pred == 1) & (true == 1)).sum())
-        fp = int(((pred == 1) & (true == 0)).sum())
-        fn = int(((pred == 0) & (true == 1)).sum())
-        precision = tp / (tp + fp + 1e-8) if tp + fp > 0 else 0.0
-        recall = tp / (tp + fn + 1e-8) if tp + fn > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall + 1e-8) if precision + recall > 0 else 0.0
-        return precision, recall, f1
-
-    p, r, f1 = metrics(inst_pred, inst_label)
+    m0 = compute_metrics_from_arrays(inst_pred, inst_label)
+    p, r, f1 = m0["precision"], m0["recall"], m0["f1"]
 
     fig, ax = plt.subplots(figsize=(12, 5))
     plt.subplots_adjust(bottom=0.39)
@@ -235,29 +181,19 @@ def main():
     ax_chk = plt.axes([0.88, 0.07, 0.1, 0.08])
     chk = CheckButtons(ax_chk, ["hysteresis"], [use_hyst])
 
-    def apply_hysteresis(seq_probs: np.ndarray, th_on: float, th_off: float) -> np.ndarray:
-        pred = np.zeros_like(seq_probs, dtype=np.float32)
-        state = 0.0
-        for i, pval in enumerate(seq_probs):
-            if state == 0.0 and pval >= th_on:
-                state = 1.0
-            elif state == 1.0 and pval < th_off:
-                state = 0.0
-            pred[i] = state
-        return pred
-
     current_pred = inst_pred.copy()
     def recompute_and_update():
         nonlocal current_pred
         if use_hyst and (s_on.val > s_off.val):
-            pred = apply_hysteresis(inst_probs, float(s_on.val), float(s_off.val))
+            pred = apply_hysteresis_seq(inst_probs, float(s_on.val), float(s_off.val))
             line_inst_pred.set_label("inst_pred_hyst")
         else:
             pred = (inst_probs >= float(s_th.val)).astype(np.float32)
             line_inst_pred.set_label("inst_pred")
         current_pred = pred.astype(np.float32)
         line_inst_pred.set_ydata(current_pred)
-        p2, r2, f2 = metrics(current_pred, inst_label)
+        m2 = compute_metrics_from_arrays(current_pred, inst_label)
+        p2, r2, f2 = m2["precision"], m2["recall"], m2["f1"]
         txt.set_text(f"Precision: {p2:.3f}  |  Recall: {r2:.3f}  |  F1: {f2:.3f}")
         ax.legend(loc="upper right")
         fig.canvas.draw_idle()
