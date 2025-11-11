@@ -75,7 +75,7 @@ def compute_pos_weight_for_subset(ds: Dataset, indices: List[int], instrumental:
             audio_path: Path = it["audio_path"]
             labels: List[Dict] = it["labels"]
             try:
-                duration = librosa.get_duration(filename=str(audio_path))
+                duration = librosa.get_duration(path=str(audio_path))
             except Exception:
                 max_end = 0.0
                 for item in labels:
