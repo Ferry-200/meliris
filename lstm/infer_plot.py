@@ -150,7 +150,7 @@ def main():
     parser.add_argument("--music-root", default=r"D:\meliris\music", help="音乐目录")
     parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent / "labels"), help="标签目录")
     parser.add_argument("--stem", default=None, help="指定文件名 stem（不含扩展名）")
-    parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent / "lstm_svd_inst.pt"), help="模型权重路径")
+    parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent.parent / "lstm_svd_inst.pt"), help="模型权重路径")
     args = parser.parse_args()
 
     music_root = Path(args.music_root)
