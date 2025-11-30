@@ -21,6 +21,8 @@ from common.postproc import compute_metrics_from_arrays, apply_hysteresis_seq
 
 
 # 与训练保持一致的特征参数从 common.config 读取
+from common.export_utils import compute_frame_dur, build_hyst_segments, make_hyst_payload
+ # 统一使用 common.export_utils 中的导出工具
 
 def format_time_ms(sec: float) -> str:
     m = int(sec // 60)
@@ -105,7 +107,9 @@ def main():
     parser.add_argument("--music-root", default=r"D:\meliris\music", help="音乐目录")
     parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent.parent / "labels"), help="标签目录")
     parser.add_argument("--stem", default=None, help="指定文件名 stem（不含扩展名）")
+    parser.add_argument("--audio-path", default=None, help="指定音频绝对路径，优先于 stem/candidates")
     parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent.parent / "lstm_svd_inst.pt"), help="模型权重路径")
+    parser.add_argument("--export-json", default=None, help="导出初始 inst_pred_hyst 为 JSON（需启用迟滞）")
     args = parser.parse_args()
 
     music_root = Path(args.music_root)
@@ -113,21 +117,29 @@ def main():
     ckpt_path = Path(args.ckpt)
 
     candidates = find_candidates(music_root, labels_root)
-    if not candidates:
-        print("未找到候选音频（不在 labels/perfect 下的同名文件）。")
-        return
-
     # 选择文件
     audio_path: Optional[Path] = None
-    if args.stem:
-        for p in candidates:
-            if p.stem == args.stem:
-                audio_path = p
-                break
+    # 优先使用绝对路径
+    if args.audio_path:
+        ap = Path(args.audio_path)
+        if not ap.exists() or not ap.is_file():
+            print(f"指定音频不存在或不是文件：{ap}")
+            return
+        audio_path = ap
+        candidates = [ap]
+    else:
+        if not candidates:
+            print("未找到候选音频（不在 labels/perfect 下的同名文件）。")
+            return
+        if args.stem:
+            for p in candidates:
+                if p.stem == args.stem:
+                    audio_path = p
+                    break
+            if audio_path is None:
+                print(f"未找到指定 stem: {args.stem}，将使用第一个候选。")
         if audio_path is None:
-            print(f"未找到指定 stem: {args.stem}，将使用第一个候选。")
-    if audio_path is None:
-        audio_path = candidates[0]
+            audio_path = candidates[0]
 
     stem = audio_path.stem
     print(f"目标音频: {audio_path}")
@@ -208,6 +220,23 @@ def main():
     s_off = Slider(ax_off, "th_off", 0.0, 1.0, valinit=th_off0, valstep=0.01)
     ax_chk = plt.axes([0.88, 0.07, 0.1, 0.08])
     chk = CheckButtons(ax_chk, ["hysteresis"], [use_hyst])
+
+    # 若指定导出路径，按初始迟滞参数导出 inst_pred_hyst
+    if args.export_json:
+        export_path = Path(args.export_json)
+        try:
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            if use_hyst and (th_on0 > th_off0):
+                pred_hyst0 = apply_hysteresis_seq(inst_probs, th_on0, th_off0).astype(np.float32)
+                frame_dur = compute_frame_dur(times, HOP_SEC)
+                segments = build_hyst_segments(pred_hyst0, times, frame_dur)
+                payload = make_hyst_payload(stem, audio_path, mode, th_on0, th_off0, SR, HOP_LENGTH, HOP_SEC, times, pred_hyst0, segments)
+                export_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                print(f"已导出 inst_pred_hyst 到：{export_path}")
+            else:
+                print("未启用迟滞或参数非法（th_on <= th_off），跳过导出。")
+        except Exception as e:
+            print(f"导出 JSON 失败：{e}")
 
     # 迟滞应用使用 common.postproc 的实现
 
@@ -320,6 +349,29 @@ def main():
 
     btn_prev.on_clicked(on_prev)
     btn_next.on_clicked(on_next)
+
+    # 导出按钮：将当前迟滞二值预测导出为 JSON
+    ax_export = plt.axes([0.36, 0.02, 0.10, 0.04])
+    btn_export = Button(ax_export, "Export")
+
+    def on_export(event):
+        # 仅在启用迟滞且参数合法时导出
+        if not use_hyst or not (s_on.val > s_off.val):
+            print("请启用 hysteresis 并确保 th_on > th_off 后再导出。")
+            return
+        try:
+            pred_hyst = apply_hysteresis_seq(inst_probs, float(s_on.val), float(s_off.val)).astype(np.float32)
+            export_path = Path(args.export_json) if args.export_json else (Path(".") / "exports" / f"{stem}_inst_pred_hyst.json")
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            frame_dur = compute_frame_dur(times, HOP_SEC)
+            segments = build_hyst_segments(pred_hyst, times, frame_dur)
+            payload = make_hyst_payload(stem, audio_path, mode, s_on.val, s_off.val, SR, HOP_LENGTH, HOP_SEC, times, pred_hyst, segments)
+            export_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            print(f"已导出 inst_pred_hyst 到：{export_path}")
+        except Exception as e:
+            print(f"导出 JSON 失败：{e}")
+
+    btn_export.on_clicked(on_export)
 
     # 鼠标移动显示时间与预测值（最近帧）
     ann = ax.annotate(
