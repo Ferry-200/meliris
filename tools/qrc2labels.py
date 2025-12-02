@@ -80,7 +80,7 @@ def trans_qrc_to_labels(src_path: Path) -> dict:
     written = 0
     skipped = 0
     (src_path / "perfect").mkdir(parents=True, exist_ok=True)
-    for p in Path(src_path).rglob("*.qrc"):
+    for p in Path(src_path / "raw").rglob("*.qrc"):
         if not p.is_file():
             continue
         total += 1

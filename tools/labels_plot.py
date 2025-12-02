@@ -87,7 +87,7 @@ def main():
     ax.xaxis.set_major_formatter(FuncFormatter(lambda t, pos: _format_time_ms(t)))
     ax.format_coord = lambda x, yv: f"t={_format_time_ms(x)}, value={yv:.3f}"
 
-    title_text = fig.text(0.5, 0.93, f"{json_path.stem}", ha="center", va="top")
+    title_text = fig.text(0.5, 0.93, f"{json_path.relative_to(labels_root)}", ha="center", va="top")
 
     ann = ax.annotate(
         "",
@@ -151,7 +151,7 @@ def main():
         line_label.set_xdata(times)
         line_label.set_ydata(y)
         ax.set_xlim(times[0], times[-1] if len(times) > 0 else 1.0)
-        title_text.set_text(f"{json_path.stem}")
+        title_text.set_text(f"{json_path.relative_to(labels_root)}")
         ann.set_visible(False)
         fig.canvas.draw_idle()
 
