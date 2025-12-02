@@ -79,9 +79,7 @@ def trans_qrc_to_labels(src_path: Path) -> dict:
     total = 0
     written = 0
     skipped = 0
-    labels_root = Path(".") / "labels"
-    (labels_root).mkdir(parents=True, exist_ok=True)
-    (labels_root / "perfect").mkdir(parents=True, exist_ok=True)
+    (src_path / "perfect").mkdir(parents=True, exist_ok=True)
     for p in Path(src_path).rglob("*.qrc"):
         if not p.is_file():
             continue
@@ -90,10 +88,12 @@ def trans_qrc_to_labels(src_path: Path) -> dict:
             qrc_text = p.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             skipped += 1
+            print(f"Error reading {p}")
             continue
         labels = parse_qrc(qrc_text)
         if not labels:
             skipped += 1
+            print(f"Empty labels for {p}")
             continue
         has_gap = False
         prev_end_ms: int | None = None
@@ -104,7 +104,7 @@ def trans_qrc_to_labels(src_path: Path) -> dict:
                 has_gap = True
                 break
             prev_end_ms = e_ms
-        out_dir = labels_root / ("perfect" if has_gap else "")
+        out_dir = src_path / ("perfect" if has_gap else "")
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / (p.stem + ".json")
         try:
@@ -112,6 +112,7 @@ def trans_qrc_to_labels(src_path: Path) -> dict:
             written += 1
         except Exception:
             skipped += 1
+            print(f"Error writing {out_path}")
             continue
     return {"total": total, "written": written, "skipped": skipped}
 
