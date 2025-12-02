@@ -11,4 +11,6 @@ dependencies = [
     "torch>=2.0",
     "tqdm>=4.64",
     "matplotlib>=3.7",
+    "silero-vad>=6.2.0",
+    "qqmusic-api-python>=0.3.6",
 ]

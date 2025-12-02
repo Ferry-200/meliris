@@ -10,4 +10,5 @@ wheels/
 .venv
 music
 labels
+labels_qrc
 features_cache
