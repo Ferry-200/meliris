@@ -605,8 +605,7 @@
             ctxEnergy.beginPath();
             
             smoothedEnergyData.forEach((db, i) => {
-                // 根据缩放后的宽度计算 X 坐标
-                const x = (i * dataStep) * pixelsPerSecond;
+                const x = (i / smoothedEnergyData.length) * w;
                 const y = mapY(db);
                 if (i === 0) ctxEnergy.moveTo(x, y);
                 else ctxEnergy.lineTo(x, y);
@@ -619,27 +618,25 @@
             const h = labelCanvas.height;
             ctxLabel.clearRect(0, 0, w, h);
 
-            // 背景 - Solarized Base 1
-            ctxLabel.fillStyle = "#93a1a1"; 
+            // 背景
+            ctxLabel.fillStyle = "#1f2937"; // gray-800
             ctxLabel.fillRect(0, 0, w, h);
 
             // 绘制标签块
-            // Solarized Green
-            ctxLabel.fillStyle = "#cb4b16"; 
+            const blockWidth = w / binaryLabels.length;
+
+            ctxLabel.fillStyle = "#cb4b16"; // green-500
             
             // 为了性能，合并相邻的矩形绘制
             let startI = -1;
             for(let i=0; i<binaryLabels.length; i++) {
-                const time = i * dataStep;
-                const nextTime = (i + 1) * dataStep;
-
                 if (binaryLabels[i] === 1) {
-                    if (startI === -1) startI = time;
+                    if (startI === -1) startI = i;
                 } else {
                     if (startI !== -1) {
                         // 绘制之前的段
-                        const x = startI * pixelsPerSecond;
-                        const bw = (time - startI) * pixelsPerSecond;
+                        const x = (startI / binaryLabels.length) * w;
+                        const bw = ((i - startI) / binaryLabels.length) * w;
                         // 加一点额外的宽度以消除缝隙
                         ctxLabel.fillRect(x, 0, bw + 0.5, h);
                         startI = -1;
@@ -648,13 +645,13 @@
             }
             // 处理结尾
             if (startI !== -1) {
-                const x = startI * pixelsPerSecond;
-                const bw = (binaryLabels.length * dataStep - startI) * pixelsPerSecond;
+                const x = (startI / binaryLabels.length) * w;
+                const bw = ((binaryLabels.length - startI) / binaryLabels.length) * w;
                 ctxLabel.fillRect(x, 0, bw, h);
             }
         }
 
-        // --- 交互微调 (略) ---
+        // --- 交互微调 ---
 
         let isDrawing = false;
         let drawMode = 1; // 1 = vocal, 0 = silence
@@ -672,9 +669,9 @@
             } else if (y > 30 && y < 180) {
                 // 点击在 Energy Canvas 区域，跳转播放
                 const x = e.clientX - rect.left + canvasWrapper.scrollLeft;
-                // 计算点击位置的时间（基于像素Per秒）
-                const time = x / pixelsPerSecond;
-                if (audioBuffer && audioBuffer.duration) { 
+                const ratio = x / energyCanvas.width;
+                if (audioBuffer && audioBuffer.duration) { // Check audioBuffer exists
+                   const time = ratio * audioBuffer.duration;
                    seekAudio(time);
                 }
             }
@@ -697,10 +694,10 @@
         function modifyLabel(e) {
             const rect = canvasWrapper.getBoundingClientRect();
             const x = e.clientX - rect.left + canvasWrapper.scrollLeft;
+            const w = labelCanvas.width;
             
-            // 映射 x 坐标到时间，再映射到数据索引
-            const time = x / pixelsPerSecond;
-            const index = Math.floor(time / dataStep);
+            // 映射 x 到数据索引
+            const index = Math.floor((x / w) * binaryLabels.length);
             
             if (index >= 0 && index < binaryLabels.length) {
                 binaryLabels[index] = drawMode;
@@ -782,10 +779,10 @@
             document.getElementById('currentTime').textContent = formatTime(time);
             
             // Fix: Check if audioBuffer exists before accessing duration
-            if (!audioBuffer) return;
+            if (!energyCanvas.width || !audioBuffer) return;
             
-            // Playhead position is now based on pixelsPerSecond
-            const x = time * pixelsPerSecond;
+            const ratio = time / audioBuffer.duration;
+            const x = ratio * energyCanvas.width;
             
             playhead.style.display = 'block';
             playhead.style.left = x + 'px';
@@ -794,11 +791,10 @@
             const containerW = canvasWrapper.clientWidth;
             const scrollLeft = canvasWrapper.scrollLeft;
             
-            // Keep playhead visible, centered if possible
             if (x > scrollLeft + containerW * 0.8) {
                 canvasWrapper.scrollLeft = x - containerW * 0.2;
-            } else if (x < scrollLeft + containerW * 0.2) {
-                canvasWrapper.scrollLeft = x - containerW * 0.8;
+            } else if (x < scrollLeft) {
+                canvasWrapper.scrollLeft = x - containerW * 0.2;
             }
         }
 
