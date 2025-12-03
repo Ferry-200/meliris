@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>人声能量标注工具 (Vocal Energy Labeler)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Solarized Light Palette */
+        /* base3: #fdf6e3 | base2: #eee8d5 | base1: #93a1a1 | base0: #839496 | base00: #657b83 */
+        /* red: #dc322f | blue: #268bd2 | cyan: #2aa198 | green: #859900 | yellow: #b58900 */
+
+        body {
+            /* Solarized Base 3 */
+            background-color: #fdf6e3; 
+            /* Solarized Base 00 */
+            color: #657b83;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden; 
+        }
+        
+        /* 自定义滚动条 - Light theme */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #eee8d5; /* base2 */
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #93a1a1; /* base1 */
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #839496; /* base0 */
+        }
+
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            /* 30 (Ruler) + 150 (Energy) + 50 (Label) = 230px */
+            height: 230px; 
+            /* Solarized Base 2 */
+            background: #eee8d5;
+            /* Solarized Base 0 */
+            border: 1px solid #839496;
+            overflow-x: auto;
+            overflow-y: hidden;
+            cursor: crosshair;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* 播放指针样式 */
+        #playhead {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            /* Solarized Red */
+            background-color: #dc322f; 
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+        }
+
+        .control-group {
+            /* Solarized Base 1 */
+            background: #eee8d5;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            /* Solarized Base 0 */
+            border: 1px solid #839496;
+        }
+
+        /* --- 滑块样式 --- */
+        input[type=range] {
+            -webkit-appearance: none; /* 清除默认样式 */
+            width: 100%;
+            background: transparent;
+            margin: 8px 0;
+        }
+
+        input[type=range]:focus {
+            outline: none;
+        }
+
+        /* WebKit (Chrome, Edge, Safari) 滑块轨道 */
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            /* Solarized Base 01 */
+            background: #586e75; 
+            border-radius: 3px;
+        }
+
+        /* WebKit 滑块拇指 - 默认 (阈值) */
+        input[type=range]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            /* Solarized Yellow (Threshold) */
+            background: #b58900; 
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -6px; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+            transition: transform 0.1s;
+        }
+
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+        }
+
+        /* Firefox 滑块轨道 */
+        input[type=range]::-moz-range-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #586e75; /* Solarized Base 01 */
+            border-radius: 3px;
+        }
+
+        /* Firefox 滑块拇指 */
+        input[type=range]::-moz-range-thumb {
+            height: 18px;
+            width: 18px;
+            border: none;
+            border-radius: 50%;
+            background: #b58900; /* Solarized Yellow */
+            cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+        }
+        
+        /* 针对平滑滑块的特殊样式覆盖 (Cyan) */
+        input#smoothSlider::-webkit-slider-thumb {
+            background: #2aa198; /* Solarized Cyan */
+        }
+        input#smoothSlider::-moz-range-thumb {
+            background: #2aa198;
+        }
+
+        /* 针对缩放滑块的特殊样式覆盖 (Green) */
+        input#zoomSlider::-webkit-slider-thumb {
+            background: #859900; /* Solarized Green */
+        }
+        input#zoomSlider::-moz-range-thumb {
+            background: #859900;
+        }
+
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- 顶部控制栏 -->
+    <header class="p-4 bg-[#eee8d5] border-b border-[#839496] flex justify-between items-center shadow-md z-20">
+        <div class="flex items-center space-x-4">
+            <h1 class="text-xl font-bold text-[#268bd2]">🎤 Vocal Labeler</h1>
+            
+            <!-- 文件输入 -->
+            <div class="flex space-x-2">
+                <label class="px-3 py-1.5 bg-[#268bd2] hover:bg-[#2aa198] rounded cursor-pointer text-sm transition text-[#fdf6e3]">
+                    📂 打开文件
+                    <input type="file" id="fileInput" accept="audio/*" class="hidden">
+                </label>
+                <label class="px-3 py-1.5 bg-[#93a1a1] hover:bg-[#839496] rounded cursor-pointer text-sm transition text-[#fdf6e3]">
+                    📂 打开文件夹
+                    <input type="file" id="folderInput" webkitdirectory directory multiple class="hidden">
+                </label>
+            </div>
+            
+            <!-- 当前文件显示 -->
+            <div id="currentFileInfo" class="text-sm text-[#657b83] max-w-xs truncate">
+                未选择文件
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-3">
+             <button id="exportBtn" class="px-4 py-1.5 bg-[#859900] hover:bg-[#b58900] rounded text-[#fdf6e3] text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition">
+                ⬇️ 导出标签
+            </button>
+        </div>
+    </header>
+
+    <!-- 主体内容 -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- 左侧：文件列表 -->
+        <aside class="w-64 bg-[#eee8d5] border-r border-[#839496] flex flex-col hidden text-[#657b83]" id="playlistPanel">
+            <div class="p-2 text-xs font-bold text-[#657b83] uppercase tracking-wider bg-[#fdf6e3]">文件列表</div>
+            <ul id="fileList" class="flex-1 overflow-y-auto text-sm">
+                <!-- 动态生成列表项 -->
+            </ul>
+        </aside>
+
+        <!-- 右侧：可视化编辑器 -->
+        <section class="flex-1 flex flex-col relative">
+            
+            <!-- 参数控制面板 - 调整为 4 列 -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-[#fdf6e3] border-b border-[#839496]">
+                
+                <!-- 阈值控制 (Col 1) -->
+                <div class="control-group flex flex-col justify-center">
+                    <div class="flex justify-between mb-1">
+                        <label class="text-xs text-[#586e75]">能量阈值 (Threshold)</label>
+                        <span id="thresholdVal" class="text-xs font-mono text-[#b58900]">-40 dB</span>
+                    </div>
+                    <input type="range" id="thresholdSlider" min="-80" max="0" value="-40" step="1">
+                </div>
+
+                <!-- 平滑控制 (Col 2) -->
+                <div class="control-group flex flex-col justify-center">
+                    <div class="flex justify-between mb-1">
+                        <label class="text-xs text-[#586e75]">平滑窗口 (Smoothing)</label>
+                        <span id="smoothVal" class="text-xs font-mono text-[#2aa198]">50 ms</span>
+                    </div>
+                    <input type="range" id="smoothSlider" min="10" max="500" value="50" step="10">
+                </div>
+                
+                <!-- 缩放控制 (Col 3) -->
+                <div class="control-group flex flex-col justify-center">
+                    <div class="flex justify-between mb-1">
+                        <label class="text-xs text-[#586e75]">缩放 (Zoom)</label>
+                        <span id="zoomVal" class="text-xs font-mono text-[#859900]">100 px/s</span>
+                    </div>
+                    <input type="range" id="zoomSlider" min="20" max="500" value="100" step="10">
+                </div>
+                
+                <!-- 播放控制 (Col 4) -->
+                <div class="control-group flex items-center justify-between">
+                     <div class="flex items-center space-x-2">
+                        <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-[#eee8d5] text-[#586e75] flex items-center justify-center hover:scale-105 transition disabled:opacity-50">
+                            ▶
+                        </button>
+                        <div class="text-xs font-mono">
+                            <span id="currentTime" class="text-[#586e75]">00:00.00</span> / 
+                            <span id="totalTime" class="text-[#839496]">00:00.00</span>
+                        </div>
+                     </div>
+                     <div class="text-xs text-[#839496] text-right">
+                        <p>左键拖拽: <span class="text-[#cb4b16]">人声</span></p>
+                        <p>Shift+拖拽: <span class="text-[#93a1a1]">间奏</span></p>
+                     </div>
+                </div>
+            </div>
+
+            <!-- 画布容器 -->
+            <div class="flex-1 bg-[#fdf6e3] relative overflow-hidden flex flex-col justify-center items-center" id="workspace">
+                <div id="loadingOverlay" class="absolute inset-0 bg-[#fdf6e3]/90 z-50 flex items-center justify-center hidden">
+                    <div class="text-center">
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-[#268bd2] mx-auto mb-4"></div>
+                        <p class="text-[#268bd2] animate-pulse">正在处理音频...</p>
+                    </div>
+                </div>
+
+                <div id="introText" class="text-[#586e75] text-lg">
+                    请导入音频文件开始分析
+                </div>
+
+                <div id="canvasWrapper" class="canvas-container hidden">
+                    <!-- 尺子画布 (Ruler Canvas) -->
+                    <canvas id="rulerCanvas" height="30" class="absolute top-0 left-0 z-20"></canvas>
+                    <!-- 能量画布 (Energy Canvas) -->
+                    <canvas id="energyCanvas" height="150" class="absolute top-[30px] left-0 z-0"></canvas>
+                    <!-- 标签画布 (Label Canvas) -->
+                    <canvas id="labelCanvas" height="50" class="absolute top-[180px] left-0 z-10 opacity-80"></canvas>
+                    <!-- 播放头 (Playhead) -->
+                    <div id="playhead"></div>
+                </div>
+            </div>
+            
+            <!-- 底部图例 -->
+            <div class="h-6 bg-[#eee8d5] border-t border-[#839496] flex items-center px-4 text-xs space-x-4">
+                <div class="flex items-center"><div class="w-3 h-3 bg-[#268bd2]/30 border border-[#268bd2] mr-1"></div> 能量曲线 (RMS)</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-[#b58900]/80 mr-1"></div> 能量阈值线</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-[#cb4b16]/60 mr-1"></div> 人声标签 (1)</div>
+                <div class="flex items-center"><div class="w-3 h-3 bg-[#93a1a1] mr-1"></div> 间奏标签 (0)</div>
+            </div>
+
+        </section>
+    </main>
+
+    <script>
+        // --- 全局变量 ---
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        let audioBuffer = null;
+        let audioSource = null;
+        let isPlaying = false;
+        let startTime = 0;
+        let pauseTime = 0;
+        
+        // 数据相关
+        let rawEnergyData = []; // 原始 RMS 数据
+        let smoothedEnergyData = []; // 平滑后 RMS 数据
+        let binaryLabels = []; // 0 或 1
+        let sampleRate = 44100;
+        let dataStep = 0; // 每个数据点代表的秒数
+        
+        // 状态相关
+        let thresholdDb = -40;
+        let smoothingMs = 50;
+        let pixelsPerSecond = 100; // NEW: 默认缩放级别 (每秒像素数)
+        let currentFileIndex = -1;
+        let fileList = [];
+        
+        // DOM 元素
+        const fileInput = document.getElementById('fileInput');
+        const folderInput = document.getElementById('folderInput');
+        const canvasWrapper = document.getElementById('canvasWrapper');
+        const rulerCanvas = document.getElementById('rulerCanvas'); // NEW
+        const energyCanvas = document.getElementById('energyCanvas');
+        const labelCanvas = document.getElementById('labelCanvas');
+        const playhead = document.getElementById('playhead');
+        
+        const ctxRuler = rulerCanvas.getContext('2d'); // NEW
+        const ctxEnergy = energyCanvas.getContext('2d');
+        const ctxLabel = labelCanvas.getContext('2d');
+        
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const introText = document.getElementById('introText');
+        const playlistPanel = document.getElementById('playlistPanel');
+        const fileListUl = document.getElementById('fileList');
+        
+        // 滑块
+        const thresholdSlider = document.getElementById('thresholdSlider');
+        const smoothSlider = document.getElementById('smoothSlider');
+        const zoomSlider = document.getElementById('zoomSlider'); // NEW
+        
+        // 初始化尺寸
+        function resizeCanvases(width) {
+            rulerCanvas.width = width; // NEW
+            energyCanvas.width = width;
+            labelCanvas.width = width;
+        }
+
+        // --- 事件监听 ---
+        
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+        folderInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        thresholdSlider.addEventListener('input', (e) => {
+            thresholdDb = parseInt(e.target.value);
+            document.getElementById('thresholdVal').textContent = thresholdDb + " dB";
+            updateLabelsFromThreshold();
+            drawAll();
+        });
+
+        smoothSlider.addEventListener('input', (e) => {
+            smoothingMs = parseInt(e.target.value);
+            document.getElementById('smoothVal').textContent = smoothingMs + " ms";
+            if(audioBuffer) processAudioData(); // 重新计算平滑
+        });
+        
+        // NEW: 缩放滑块事件
+        zoomSlider.addEventListener('input', (e) => {
+            pixelsPerSecond = parseInt(e.target.value);
+            document.getElementById('zoomVal').textContent = pixelsPerSecond + " px/s";
+            if (audioBuffer) {
+                // 仅更新宽度和重绘，不需要重新计算能量数据
+                const totalWidth = Math.max(canvasWrapper.clientWidth, Math.ceil(audioBuffer.duration * pixelsPerSecond));
+                resizeCanvases(totalWidth);
+                drawAll();
+                updatePlayheadPosition(pauseTime); // 缩放后播放头位置需要更新
+            }
+        });
+
+
+        document.getElementById('playPauseBtn').addEventListener('click', togglePlay);
+        document.getElementById('exportBtn').addEventListener('click', exportLabels);
+
+        // --- 文件处理 (略) ---
+
+        function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            // 过滤音频文件
+            fileList = Array.from(files).filter(f => f.type.startsWith('audio/') || f.name.endsWith('.wav') || f.name.endsWith('.mp3') || f.name.endsWith('.flac'));
+            
+            if (fileList.length === 0) {
+                // 使用 console.error 代替 alert
+                console.error("未找到有效的音频文件");
+                return;
+            }
+
+            // 更新播放列表UI
+            renderPlaylist();
+            
+            // 如果只有一个文件，隐藏列表，直接加载。如果是文件夹，显示列表。
+            if (fileList.length > 1) {
+                playlistPanel.classList.remove('hidden');
+            } else {
+                playlistPanel.classList.add('hidden');
+            }
+
+            loadFile(0); // 加载第一个
+        }
+
+        function renderPlaylist() {
+            fileListUl.innerHTML = '';
+            fileList.forEach((file, index) => {
+                const li = document.createElement('li');
+                // Solarized Base 00 Text, Violet Background for selected
+                li.className = `p-2 cursor-pointer hover:bg-[#839496] truncate ${index === currentFileIndex ? 'bg-[#6c71c4] text-[#fdf6e3]' : 'text-[#657b83]'}`;
+                li.textContent = file.name;
+                li.onclick = () => loadFile(index);
+                fileListUl.appendChild(li);
+            });
+        }
+
+        async function loadFile(index) {
+            if (index < 0 || index >= fileList.length) return;
+            
+            stopAudio();
+            currentFileIndex = index;
+            renderPlaylist(); // 更新高亮
+            
+            const file = fileList[index];
+            document.getElementById('currentFileInfo').textContent = file.name;
+            introText.classList.add('hidden');
+            loadingOverlay.classList.remove('hidden');
+            canvasWrapper.classList.add('hidden');
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                sampleRate = audioBuffer.sampleRate;
+                
+                processAudioData();
+                
+                canvasWrapper.classList.remove('hidden');
+                document.getElementById('totalTime').textContent = formatTime(audioBuffer.duration);
+                // 启用按钮
+                document.getElementById('playPauseBtn').disabled = false;
+                document.getElementById('exportBtn').disabled = false;
+            } catch (err) {
+                console.error("音频解码失败: ", err.message);
+                // 更好的错误提示
+                document.getElementById('introText').textContent = `音频解码失败: ${err.message}`;
+                document.getElementById('introText').classList.remove('hidden');
+            } finally {
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        // --- 核心逻辑：能量计算 ---
+
+        function processAudioData() {
+            if (!audioBuffer) return;
+
+            const rawData = audioBuffer.getChannelData(0); // 只取单声道
+            const windowSize = Math.floor((smoothingMs / 1000) * sampleRate);
+            dataStep = smoothingMs / 1000; // 每个点的时长 (秒)
+            
+            rawEnergyData = [];
+            
+            // 计算 RMS
+            for (let i = 0; i < rawData.length; i += windowSize) {
+                let sum = 0;
+                // 防止边界溢出
+                const end = Math.min(i + windowSize, rawData.length);
+                const count = end - i;
+                
+                for (let j = i; j < end; j++) {
+                    sum += rawData[j] * rawData[j];
+                }
+                const rms = Math.sqrt(sum / count);
+                // 转换为 dB: 20 * log10(rms). 防止 log(0)
+                const db = rms > 0.000001 ? 20 * Math.log10(rms) : -100;
+                rawEnergyData.push(db);
+            }
+
+            // 可以在这里加额外的平滑，但 RMS 本身就是一种平滑。我们直接用这个数据。
+            smoothedEnergyData = rawEnergyData; 
+
+            // 设置画布宽度：每秒 pixelsPerSecond 像素，或者适配屏幕，这里做成横向滚动
+            // 使用全局的 pixelsPerSecond 变量
+            const totalWidth = Math.max(canvasWrapper.clientWidth, Math.ceil(audioBuffer.duration * pixelsPerSecond));
+            
+            resizeCanvases(totalWidth);
+            updateLabelsFromThreshold();
+            drawAll();
+            document.getElementById('zoomVal').textContent = pixelsPerSecond + " px/s"; // 确保初始化时显示正确
+        }
+
+        // --- 核心逻辑：标签生成 (略) ---
+
+        function updateLabelsFromThreshold() {
+            // 根据阈值重新生成标签，但不覆盖用户手动修改过的区域？
+            // 简单起见，拖动滑块会重置所有标签。如果要做复杂撤销，需要历史栈。
+            // 这里我们做全量更新。
+            binaryLabels = smoothedEnergyData.map(db => db > thresholdDb ? 1 : 0);
+        }
+
+        // --- 绘图逻辑 ---
+
+        function drawAll() {
+            drawRuler(); // NEW: 绘制尺子
+            drawEnergy();
+            drawLabels();
+        }
+        
+        // NEW: 绘制尺子
+        function drawRuler() {
+            const w = rulerCanvas.width;
+            const h = rulerCanvas.height;
+            ctxRuler.clearRect(0, 0, w, h);
+            // Solarized Base 1
+            ctxRuler.fillStyle = "#eee8d5"; 
+            ctxRuler.fillRect(0, 0, w, h);
+
+            if (!audioBuffer) return;
+
+            const duration = audioBuffer.duration;
+            let majorInterval = 1; // 默认每 1 秒一个主刻度
+            
+            // 根据缩放级别调整刻度密度
+            if (pixelsPerSecond < 40) majorInterval = 5;
+            else if (pixelsPerSecond < 80) majorInterval = 2;
+            else if (pixelsPerSecond > 200) majorInterval = 0.5;
+            
+            // Solarized Base 0
+            ctxRuler.strokeStyle = "#839496"; 
+            ctxRuler.fillStyle = "#839496";
+            ctxRuler.font = "10px Inter, sans-serif";
+            ctxRuler.textAlign = "center";
+            ctxRuler.textBaseline = "middle";
+
+            for (let t = 0; t <= duration + majorInterval; t += majorInterval) {
+                const x = t * pixelsPerSecond;
+                if (x > w) break;
+
+                // Major Tick
+                ctxRuler.beginPath();
+                ctxRuler.moveTo(x, h);
+                ctxRuler.lineTo(x, h - 10);
+                ctxRuler.stroke();
+                
+                // Time Label
+                ctxRuler.fillText(formatTime(t), x, h - 18);
+                
+                // Minor Ticks (only if zoom is high enough to see them)
+                if (majorInterval >= 1) {
+                    for (let minor = 1; minor < 5; minor++) {
+                        const minorTime = t + (majorInterval / 5) * minor;
+                        if (minorTime < duration) {
+                            const minorX = minorTime * pixelsPerSecond;
+                            // 检查是否在下一个主刻度之前
+                            if (minorX < (t + majorInterval) * pixelsPerSecond) {
+                                ctxRuler.beginPath();
+                                ctxRuler.moveTo(minorX, h);
+                                ctxRuler.lineTo(minorX, h - 5);
+                                ctxRuler.stroke();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+        function drawEnergy() {
+            const w = energyCanvas.width;
+            const h = energyCanvas.height;
+            ctxEnergy.clearRect(0, 0, w, h);
+
+            // 绘制背景网格
+            // Solarized Base 2
+            ctxEnergy.fillStyle = "#eee8d5"; 
+            ctxEnergy.fillRect(0, 0, w, h);
+            // Solarized Base 0
+            ctxEnergy.strokeStyle = "#839496"; 
+            ctxEnergy.beginPath();
+            ctxEnergy.moveTo(0, h/2);
+            ctxEnergy.lineTo(w, h/2);
+            ctxEnergy.stroke();
+
+            // 映射 dB 到 Y 轴。范围 -80dB (底部) 到 0dB (顶部)
+            // y = h - ( (db + 80) / 80 * h )
+            const mapY = (db) => {
+                let norm = (db + 80) / 80;
+                if (norm < 0) norm = 0;
+                if (norm > 1) norm = 1;
+                return h - (norm * h);
+            };
+
+            // 绘制阈值线
+            const threshY = mapY(thresholdDb);
+            // Solarized Yellow
+            ctxEnergy.strokeStyle = "#b58900"; 
+            ctxEnergy.lineWidth = 1;
+            ctxEnergy.setLineDash([5, 5]);
+            ctxEnergy.beginPath();
+            ctxEnergy.moveTo(0, threshY);
+            ctxEnergy.lineTo(w, threshY);
+            ctxEnergy.stroke();
+            ctxEnergy.setLineDash([]);
+
+            // 绘制波形
+            // Solarized Blue
+            ctxEnergy.strokeStyle = "#268bd2"; 
+            ctxEnergy.lineWidth = 2;
+            ctxEnergy.beginPath();
+            
+            smoothedEnergyData.forEach((db, i) => {
+                // 根据缩放后的宽度计算 X 坐标
+                const x = (i * dataStep) * pixelsPerSecond;
+                const y = mapY(db);
+                if (i === 0) ctxEnergy.moveTo(x, y);
+                else ctxEnergy.lineTo(x, y);
+            });
+            ctxEnergy.stroke();
+        }
+
+        function drawLabels() {
+            const w = labelCanvas.width;
+            const h = labelCanvas.height;
+            ctxLabel.clearRect(0, 0, w, h);
+
+            // 背景 - Solarized Base 1
+            ctxLabel.fillStyle = "#93a1a1"; 
+            ctxLabel.fillRect(0, 0, w, h);
+
+            // 绘制标签块
+            // Solarized Green
+            ctxLabel.fillStyle = "#cb4b16"; 
+            
+            // 为了性能，合并相邻的矩形绘制
+            let startI = -1;
+            for(let i=0; i<binaryLabels.length; i++) {
+                const time = i * dataStep;
+                const nextTime = (i + 1) * dataStep;
+
+                if (binaryLabels[i] === 1) {
+                    if (startI === -1) startI = time;
+                } else {
+                    if (startI !== -1) {
+                        // 绘制之前的段
+                        const x = startI * pixelsPerSecond;
+                        const bw = (time - startI) * pixelsPerSecond;
+                        // 加一点额外的宽度以消除缝隙
+                        ctxLabel.fillRect(x, 0, bw + 0.5, h);
+                        startI = -1;
+                    }
+                }
+            }
+            // 处理结尾
+            if (startI !== -1) {
+                const x = startI * pixelsPerSecond;
+                const bw = (binaryLabels.length * dataStep - startI) * pixelsPerSecond;
+                ctxLabel.fillRect(x, 0, bw, h);
+            }
+        }
+
+        // --- 交互微调 (略) ---
+
+        let isDrawing = false;
+        let drawMode = 1; // 1 = vocal, 0 = silence
+
+        canvasWrapper.addEventListener('mousedown', (e) => {
+            const rect = canvasWrapper.getBoundingClientRect();
+            // 注意：y 坐标现在需要考虑到 RulerCanvas 的 30px 高度
+            const y = e.clientY - rect.top + canvasWrapper.scrollTop;
+            
+            // 假设 Ruler 30, Energy 150, Label 50. Label Start at 180.
+            if (y > 180) {
+                isDrawing = true;
+                drawMode = e.shiftKey ? 0 : 1; // Shift 擦除
+                modifyLabel(e);
+            } else if (y > 30 && y < 180) {
+                // 点击在 Energy Canvas 区域，跳转播放
+                const x = e.clientX - rect.left + canvasWrapper.scrollLeft;
+                // 计算点击位置的时间（基于像素Per秒）
+                const time = x / pixelsPerSecond;
+                if (audioBuffer && audioBuffer.duration) { 
+                   seekAudio(time);
+                }
+            }
+            // 忽略点击在 Ruler Canvas (0-30px) 区域
+        });
+
+        canvasWrapper.addEventListener('mousemove', (e) => {
+            if (isDrawing) {
+                modifyLabel(e);
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                drawLabels(); // 结束时重绘确保清晰
+            }
+        });
+
+        function modifyLabel(e) {
+            const rect = canvasWrapper.getBoundingClientRect();
+            const x = e.clientX - rect.left + canvasWrapper.scrollLeft;
+            
+            // 映射 x 坐标到时间，再映射到数据索引
+            const time = x / pixelsPerSecond;
+            const index = Math.floor(time / dataStep);
+            
+            if (index >= 0 && index < binaryLabels.length) {
+                binaryLabels[index] = drawMode;
+                
+                requestAnimationFrame(drawLabels);
+            }
+        }
+
+        // --- 音频播放 (略) ---
+
+        function togglePlay() {
+            if (isPlaying) {
+                pauseAudio();
+            } else {
+                playAudio();
+            }
+        }
+
+        function playAudio() {
+            if (!audioBuffer) return;
+            
+            audioSource = audioContext.createBufferSource();
+            audioSource.buffer = audioBuffer;
+            audioSource.connect(audioContext.destination);
+            
+            startTime = audioContext.currentTime - pauseTime;
+            audioSource.start(0, pauseTime);
+            isPlaying = true;
+            document.getElementById('playPauseBtn').textContent = '⏸';
+            
+            updatePlayhead();
+        }
+
+        function pauseAudio() {
+            if (audioSource) {
+                audioSource.stop();
+                audioSource = null;
+            }
+            pauseTime = audioContext.currentTime - startTime;
+            isPlaying = false;
+            document.getElementById('playPauseBtn').textContent = '▶';
+        }
+
+        function stopAudio() {
+            if (audioSource) {
+                audioSource.stop();
+                audioSource = null;
+            }
+            isPlaying = false;
+            pauseTime = 0;
+            startTime = 0;
+            updatePlayheadPosition(0);
+            document.getElementById('playPauseBtn').textContent = '▶';
+        }
+
+        function seekAudio(time) {
+            const wasPlaying = isPlaying;
+            if (isPlaying) pauseAudio();
+            pauseTime = Math.max(0, Math.min(time, audioBuffer.duration));
+            updatePlayheadPosition(pauseTime);
+            if (wasPlaying) playAudio();
+        }
+
+        function updatePlayhead() {
+            if (!isPlaying) return;
+            
+            const current = audioContext.currentTime - startTime;
+            
+            if (current >= audioBuffer.duration) {
+                stopAudio();
+                return;
+            }
+            
+            updatePlayheadPosition(current);
+            requestAnimationFrame(updatePlayhead);
+        }
+
+        function updatePlayheadPosition(time) {
+            document.getElementById('currentTime').textContent = formatTime(time);
+            
+            // Fix: Check if audioBuffer exists before accessing duration
+            if (!audioBuffer) return;
+            
+            // Playhead position is now based on pixelsPerSecond
+            const x = time * pixelsPerSecond;
+            
+            playhead.style.display = 'block';
+            playhead.style.left = x + 'px';
+            
+            // 自动滚动
+            const containerW = canvasWrapper.clientWidth;
+            const scrollLeft = canvasWrapper.scrollLeft;
+            
+            // Keep playhead visible, centered if possible
+            if (x > scrollLeft + containerW * 0.8) {
+                canvasWrapper.scrollLeft = x - containerW * 0.2;
+            } else if (x < scrollLeft + containerW * 0.2) {
+                canvasWrapper.scrollLeft = x - containerW * 0.8;
+            }
+        }
+
+        function formatTime(seconds) {
+            const min = Math.floor(seconds / 60);
+            const sec = Math.floor(seconds % 60);
+            const ms = Math.floor((seconds % 1) * 100);
+            // 只有整秒显示 00:00.00
+            if (seconds % 1 === 0) {
+                 return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+            }
+            // 否则显示到小数点后两位
+            return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0').slice(0, 2)}`;
+        }
+
+        // --- 导出功能 (略) ---
+
+        function exportLabels() {
+            if (!audioBuffer) return;
+            
+            // 1. 合并连续段
+            const segments = [];
+            let currentStart = -1;
+            
+            // 这里我们只导出 label=1 (人声) 的段，或者导出全部
+            // 通常 Audacity 只需要标注区域。我们导出 人声区域。
+            
+            for (let i = 0; i < binaryLabels.length; i++) {
+                const label = binaryLabels[i];
+                const time = i * dataStep;
+                
+                if (label === 1 && currentStart === -1) {
+                    currentStart = time;
+                } else if (label === 0 && currentStart !== -1) {
+                    segments.push({
+                        start: currentStart,
+                        end: time,
+                        label: 'Vocal'
+                    });
+                    currentStart = -1;
+                }
+            }
+            // 结尾检查
+            if (currentStart !== -1) {
+                segments.push({
+                    start: currentStart,
+                    end: binaryLabels.length * dataStep,
+                    label: 'Vocal'
+                });
+            }
+
+            // 2. 生成 Audacity 格式文本 (Start	End	Label)
+            let txtContent = "";
+            segments.forEach(seg => {
+                txtContent += `${seg.start.toFixed(6)}\t${seg.end.toFixed(6)}\t${seg.label}\n`;
+            });
+
+            // 3. 生成 JSON
+            const jsonContent = JSON.stringify({
+                filename: fileList[currentFileIndex].name,
+                duration: audioBuffer.duration,
+                segments: segments,
+                thresholdUsed: thresholdDb,
+                smoothingUsed: smoothingMs,
+                zoomUsed: pixelsPerSecond // NEW
+            }, null, 2);
+
+            // 4. 下载
+            downloadFile(txtContent, 'labels.txt', 'text/plain');
+            // downloadFile(jsonContent, 'labels.json', 'application/json'); 
+        }
+
+        function downloadFile(content, fileName, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+    </script>
+</body>
+</html>
