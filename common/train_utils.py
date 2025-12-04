@@ -15,7 +15,7 @@ except Exception as e:
     raise RuntimeError("librosa 未安装，请在环境中安装后再运行脚本。") from e
 
 from .config import HOP_SEC
-from .data import LazySVDDataset, labels_to_frame_targets
+from .data import LazySVDDataset, LazyMTLDataset, labels_to_frame_targets
 
 
 def set_seed(seed: int = 42):
@@ -70,6 +70,25 @@ def compute_pos_weight_for_subset(ds: Dataset, indices: List[int], instrumental:
     pos = 0.0
     total = 0.0
     if isinstance(ds, LazySVDDataset):
+        for i in indices:
+            it = ds.items[i]
+            audio_path: Path = it["audio_path"]
+            labels: List[Dict] = it["labels"]
+            try:
+                duration = librosa.get_duration(path=str(audio_path))
+            except Exception:
+                max_end = 0.0
+                for item in labels:
+                    end_m, end_s = item["end"][0], item["end"][1]
+                    max_end = max(max_end, end_m * 60.0 + float(end_s))
+                duration = max_end
+            T = int(math.ceil(duration / HOP_SEC))
+            y = labels_to_frame_targets(labels, T=T)
+            if instrumental:
+                y = 1.0 - y
+            pos += float(y.sum())
+            total += float(T)
+    elif isinstance(ds, LazyMTLDataset):
         for i in indices:
             it = ds.items[i]
             audio_path: Path = it["audio_path"]

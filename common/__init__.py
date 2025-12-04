@@ -13,6 +13,8 @@ from .data import (
     SVDDataset,
     LazySVDDataset,
     collate_pad,
+    LazyMTLDataset,
+    collate_pad_mtl,
 )
 from .postproc import (
     compute_metrics_from_arrays,

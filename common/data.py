@@ -162,3 +162,87 @@ def collate_pad(batch):
         y_pad[i, :t] = y
         mask[i, :t] = 1.0
     return X_pad, y_pad, mask, names, lengths
+
+
+class LazyMTLDataset(Dataset):
+    def __init__(self, labels_root: Path, music_root: Path, demucs_root: Path, cache_dir: Optional[Path] = None):
+        self.items: List[Dict] = []
+        self.cache_dir = cache_dir
+        perfect_root = labels_root / "perfect"
+        for p in perfect_root.glob("*.json"):
+            stem = p.stem
+            audio_path: Optional[Path] = None
+            for ext in AUDIO_EXTS_ORDER:
+                q = music_root / f"{stem}{ext}"
+                if q.exists():
+                    audio_path = q
+                    break
+            if audio_path is None:
+                continue
+            vocals_path = demucs_root / stem / "vocals.flac"
+            inst_path = demucs_root / stem / "no_vocals.flac"
+            if (not vocals_path.exists()) or (not inst_path.exists()):
+                continue
+            try:
+                labels = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                labels = []
+            self.items.append({
+                "name": stem,
+                "audio_path": audio_path,
+                "labels": labels,
+                "vocals_path": vocals_path,
+                "inst_path": inst_path,
+            })
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx: int):
+        it = self.items[idx]
+        stem = it["name"]
+        audio_path: Path = it["audio_path"]
+        labels: List[Dict] = it["labels"]
+        vocals_path: Path = it["vocals_path"]
+        inst_path: Path = it["inst_path"]
+
+        if self.cache_dir is not None:
+            cache_file = self.cache_dir / f"{stem}.npy"
+            if cache_file.exists():
+                X = np.load(cache_file, mmap_mode="r")
+            else:
+                X = load_mel(audio_path)
+                try:
+                    np.save(cache_file, X)
+                except Exception:
+                    pass
+        else:
+            X = load_mel(audio_path)
+
+        V_mel = load_mel(vocals_path)
+        I_mel = load_mel(inst_path)
+        T_min = min(X.shape[0], V_mel.shape[0], I_mel.shape[0])
+        X = X[:T_min]
+        V_energy = V_mel[:T_min].sum(axis=1)
+        I_energy = I_mel[:T_min].sum(axis=1)
+        ratio = (V_energy / (V_energy + I_energy + 1e-8)).astype(np.float32)
+        y_vocal = labels_to_frame_targets(labels, T=T_min)
+        return torch.from_numpy(X.copy()), torch.from_numpy(y_vocal.copy()), torch.from_numpy(ratio.copy()), stem
+
+
+def collate_pad_mtl(batch):
+    names = [b[3] for b in batch]
+    lengths = [b[0].shape[0] for b in batch]
+    F = batch[0][0].shape[1]
+    T_max = max(lengths)
+    X_pad = torch.zeros((len(batch), T_max, F), dtype=torch.float32)
+    y_vocal_pad = torch.zeros((len(batch), T_max), dtype=torch.float32)
+    y_ratio_pad = torch.zeros((len(batch), T_max), dtype=torch.float32)
+    mask = torch.zeros((len(batch), T_max), dtype=torch.float32)
+    for i, (X, y_vocal, y_ratio, _) in enumerate(batch):
+        t = X.shape[0]
+        X_pad[i, :t, :] = X
+        y_vocal_pad[i, :t] = y_vocal
+        y_ratio_pad[i, :t] = y_ratio
+        mask[i, :t] = 1.0
+    return X_pad, y_vocal_pad, y_ratio_pad, mask, names, lengths
