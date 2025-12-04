@@ -82,6 +82,23 @@ def run_infer(model: CNNLSTM2Head, X: np.ndarray) -> tuple[np.ndarray, np.ndarra
     return probs_cls.astype(np.float32), probs_reg.astype(np.float32)
 
 
+def filter_short_runs(pred: np.ndarray, min_frames: int) -> np.ndarray:
+    arr = pred.astype(np.float32).copy()
+    n = arr.shape[0]
+    i = 0
+    while i < n:
+        if arr[i] >= 0.5:
+            j = i + 1
+            while j < n and arr[j] >= 0.5:
+                j += 1
+            if (j - i) < min_frames:
+                arr[i:j] = 0.0
+            i = j
+        else:
+            i += 1
+    return arr
+
+
 def find_candidates(music_root: Path, labels_root: Path) -> List[Path]:
     perfect_root = labels_root / "perfect"
     candidates: List[Path] = []
@@ -196,6 +213,7 @@ def main():
     off_init = config.get("eval_hyst_off", None)
     postproc = str(config.get("eval_postproc", "threshold"))
     use_hyst = False
+    filter_short = False
     if postproc == "hysteresis" and isinstance(on_init, (int, float)) and isinstance(off_init, (int, float)) and (float(on_init) > float(off_init)):
         use_hyst = True
     th_on0 = float(on_init) if isinstance(on_init, (int, float)) else 0.5
@@ -205,8 +223,8 @@ def main():
     ax_off = plt.axes([0.53, 0.07, 0.32, 0.03])
     s_on = Slider(ax_on, "th_on", 0.0, 1.0, valinit=th_on0, valstep=0.01)
     s_off = Slider(ax_off, "th_off", 0.0, 1.0, valinit=th_off0, valstep=0.01)
-    ax_chk = plt.axes([0.88, 0.07, 0.1, 0.08])
-    chk = CheckButtons(ax_chk, ["hysteresis"], [use_hyst])
+    ax_chk = plt.axes([0.90, 0.07, 0.10, 0.10])
+    chk = CheckButtons(ax_chk, ["hysteresis", "filter<500ms"], [use_hyst, filter_short])
 
     # 若指定导出路径，按初始迟滞参数导出 inst_pred_hyst
     if args.export_json:
@@ -234,6 +252,10 @@ def main():
         else:
             pred = (inst_probs >= float(s_th.val)).astype(np.float32)
             line_inst_pred.set_label("inst_pred")
+        if filter_short:
+            min_frames = max(1, int(math.ceil(0.500 / HOP_SEC)))
+            pred = filter_short_runs(pred, min_frames)
+            line_inst_pred.set_label(f"{line_inst_pred.get_label()}+filt")
         current_pred = pred.astype(np.float32)
         line_inst_pred.set_ydata(current_pred)
         m2 = compute_metrics_from_arrays(current_pred, inst_label)
@@ -252,8 +274,11 @@ def main():
         recompute_and_update()
 
     def on_chk_clicked(label):
-        nonlocal use_hyst
-        use_hyst = not use_hyst
+        nonlocal use_hyst, filter_short
+        if label == "hysteresis":
+            use_hyst = not use_hyst
+        elif label == "filter<500ms":
+            filter_short = not filter_short
         recompute_and_update()
 
     s_th.on_changed(on_th_change)
