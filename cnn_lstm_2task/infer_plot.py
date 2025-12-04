@@ -180,7 +180,7 @@ def main():
     txt = ax.text(0.01, 1.02, f"Precision: {p:.3f}  |  Recall: {r:.3f}  |  F1: {f1:.3f}", transform=ax.transAxes)
 
     pos = ax.get_position()
-    ax_ratio = plt.axes([pos.x0, 0.27, pos.width, 0.06], sharex=ax)
+    ax_ratio = plt.axes([pos.x0, 0.21, pos.width, 0.17], sharex=ax)
     line_ratio_pred, = ax_ratio.plot(times, probs_ratio, color="tab:orange")
     ax_ratio.set_ylabel("Ratio")
     ax_ratio.set_ylim(-0.05, 1.05)
@@ -261,7 +261,7 @@ def main():
     s_off.on_changed(on_off_change)
     chk.on_clicked(on_chk_clicked)
 
-    title_text = fig.text(0.5, 0.20, f"{stem}", ha="center", va="top")
+    title_text = fig.text(0.5, 0.95, f"{stem}", ha="center", va="top")
 
     recompute_and_update()
 
