@@ -96,13 +96,13 @@ def filter_short_runs(pred: np.ndarray, min_frames: int) -> np.ndarray:
     return arr
 
 
-def find_candidates(music_root: Path, labels_root: Path) -> List[Path]:
+def find_candidates(music_root: Path, labels_root: Path, with_perfect: bool = False) -> List[Path]:
     perfect_root = labels_root / "perfect"
     candidates: List[Path] = []
     for p in music_root.glob("*"):
         if p.is_file():
             stem = p.stem
-            if not (perfect_root / f"{stem}.json").exists():
+            if (not (perfect_root / f"{stem}.json").exists()) or with_perfect:
                 candidates.append(p)
     return candidates
 
@@ -110,7 +110,8 @@ def find_candidates(music_root: Path, labels_root: Path) -> List[Path]:
 def main():
     parser = argparse.ArgumentParser(description="CNN+LSTM 推理可视化：不在 labels/perfect 下的音频，与 labels 对照")
     parser.add_argument("--music-root", default=r"D:\meliris\music", help="音乐目录")
-    parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent.parent / "labels"), help="标签目录")
+    parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent.parent / "labels_qrc"), help="标签目录")
+    parser.add_argument("--with-perfect", action="store_true", help="包含 labels/perfect 下的音频")
     parser.add_argument("--stem", default=None, help="指定文件名 stem（不含扩展名）")
     parser.add_argument("--audio-path", default=None, help="指定音频绝对路径，优先于 stem/candidates")
     parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent.parent / "cnn_lstm_inst.pt"), help="模型权重路径")
@@ -121,7 +122,7 @@ def main():
     labels_root = Path(args.labels_root)
     ckpt_path = Path(args.ckpt)
 
-    candidates = find_candidates(music_root, labels_root)
+    candidates = find_candidates(music_root, labels_root, with_perfect=args.with_perfect)
     audio_path: Optional[Path] = None
     # 优先使用绝对路径
     if args.audio_path:
@@ -158,10 +159,16 @@ def main():
     times = np.arange(T) * HOP_SEC
 
     label_json_path = labels_root / f"{stem}.json"
+    perfect_json_path = labels_root / "perfect" / f"{stem}.json"
     labels = None
     if label_json_path.exists():
         try:
             labels = json.loads(label_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            labels = None
+    elif perfect_json_path.exists():
+        try:
+            labels = json.loads(perfect_json_path.read_text(encoding="utf-8"))
         except Exception:
             labels = None
     y_true = labels_to_frame_targets(labels or [], T)
@@ -186,7 +193,7 @@ def main():
     ax.set_ylabel("Instrumental Probability / Binary")
     ax.set_ylim(-0.05, 1.05)
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right")
+    ax.legend(loc="lower left")
 
     ax.xaxis.set_major_formatter(FuncFormatter(lambda t, pos: format_time_ms(t)))
     ax.format_coord = lambda x, y: f"t={format_time_ms(x)}, value={y:.3f}"
@@ -248,7 +255,7 @@ def main():
         m2 = compute_metrics_from_arrays(current_pred, inst_label)
         p2, r2, f2 = m2["precision"], m2["recall"], m2["f1"]
         txt.set_text(f"Precision: {p2:.3f}  |  Recall: {r2:.3f}  |  F1: {f2:.3f}")
-        ax.legend(loc="upper right")
+        ax.legend(loc="lower left")
         fig.canvas.draw_idle()
 
     def on_th_change(val):
@@ -292,10 +299,17 @@ def main():
         T = X.shape[0]
         times = np.arange(T) * HOP_SEC
         label_json_path2 = labels_root / f"{stem}.json"
+        perfect_json_path2 = labels_root / "perfect" / f"{stem}.json"
+        
         labels = None
         if label_json_path2.exists():
             try:
                 labels = json.loads(label_json_path2.read_text(encoding="utf-8"))
+            except Exception:
+                labels = None
+        elif perfect_json_path2.exists():
+            try:
+                labels = json.loads(perfect_json_path2.read_text(encoding="utf-8"))
             except Exception:
                 labels = None
         y_true = labels_to_frame_targets(labels or [], T)

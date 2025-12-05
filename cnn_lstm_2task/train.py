@@ -206,7 +206,7 @@ def run_training(
 
     best_f1 = -1.0
     if save_path is None:
-        default_name = "cnn_lstm_2task_inst.pt" if instrumental else "cnn_lstm_2task.pt"
+        default_name = "cnn_lstm_2task_inst_lambda2-0.75.pt" if instrumental else "cnn_lstm_2task.pt"
         best_path = Path(".") / default_name
     else:
         best_path = Path(save_path)
@@ -252,17 +252,17 @@ def run_training(
 
 def main():
     parser = argparse.ArgumentParser(description="训练 CNN+LSTM（支持人声或间奏模式）")
-    parser.add_argument("--labels-root", default=str(Path(".") / "labels"))
+    parser.add_argument("--labels-root", default=str(Path(".") / "labels_qrc"))
     parser.add_argument("--music-root", default=r"D:\meliris\music")
     parser.add_argument("--demucs-root", default=r"D:\ferry\Demucs-GUI_1.3.2_cuda_mkl\separated\htdemucs")
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lazy", action="store_true", default=True)
     parser.add_argument("--no-lazy", dest="lazy", action="store_false")
     parser.set_defaults(lazy=True)
     parser.add_argument("--mode", choices=["vocal", "instrumental"], default="instrumental")
     parser.add_argument("--lambda1", type=float, default=1.0)
-    parser.add_argument("--lambda2", type=float, default=1.0)
+    parser.add_argument("--lambda2", type=float, default=0.75)
     parser.add_argument("--save-path", default=None)
     parser.add_argument("--eval-hyst-on", type=float, default=0.6)
     parser.add_argument("--eval-hyst-off", type=float, default=0.3)

@@ -46,7 +46,7 @@ def _collect_label_files(labels_root: Path) -> List[Path]:
 
 def main():
     parser = argparse.ArgumentParser(description="可视化 labels JSON（含 ./labels 与 ./labels/perfect）")
-    parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent.parent / "labels"))
+    parser.add_argument("--labels-root", default=str(Path(__file__).resolve().parent.parent / "labels_qrc"))
     parser.add_argument("--stem", default=None)
     args = parser.parse_args()
 
