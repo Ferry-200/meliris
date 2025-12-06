@@ -20,30 +20,12 @@ try:
 except Exception as e:
     raise RuntimeError("librosa 未安装，请在环境中安装后再运行训练脚本。") from e
 
-
-# 共享配置与工具（抽取到 common 模块）
 from common import (
     SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC,
-    LazyMTLDataset, collate_pad_mtl,
+    LazyMTLDatasetMulFeatures, collate_pad_mtl,
     set_seed, compute_pos_weight_for_subset,
     compute_metrics_from_arrays, grid_search_hysteresis, compute_hysteresis_metrics,
 )
-
-
-def set_seed(seed: int = 42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-
-## mel 频谱提取已抽取至 common.data.load_mel
-
-
-## 标签到帧级目标转换已抽取至 common.data.labels_to_frame_targets
-
-
-## 数据集与 collate 函数已抽取至 common.data
 
 
 class CNNLSTM2Head(nn.Module):
@@ -145,12 +127,6 @@ def collect_val_outputs(model, loader, device, instrumental: bool):
     return probs_flat_all, y_flat_all, probs_seqs, y_seqs, (total_loss / max(1, len(loader)))
 
 
-## 指标与迟滞搜索已抽取至 common.postproc
-
-
-## pos_weight 计算已抽取至 common.train_utils
-
-
 def run_training(
     labels_root: Path,
     music_root: Path,
@@ -158,7 +134,7 @@ def run_training(
     epochs: int = 5,
     batch_size: int = 2,
     lazy: bool = True,
-    cache_dir: Optional[Path] = Path("./features_cache"),
+    cache_dir: Optional[Path] = Path("./features_cache_mul"),
     mode: str = "vocal",
     lambda1: float = 1.0,
     lambda2: float = 1.0,
@@ -169,9 +145,9 @@ def run_training(
     energy_thresh: float = 0.0,
 ):
     set_seed(42)
-    assert mode in ("vocal", "instrumental"), "mode 仅支持 'vocal' 或 'instrumental'"
+    assert mode in ("vocal", "instrumental")
     instrumental = (mode == "instrumental")
-    ds = LazyMTLDataset(labels_root=labels_root, music_root=music_root, demucs_root=demucs_root, cache_dir=cache_dir)
+    ds = LazyMTLDatasetMulFeatures(labels_root=labels_root, music_root=music_root, demucs_root=demucs_root, cache_dir=cache_dir)
     if len(ds) == 0:
         raise RuntimeError("数据集为空：请确认 labels/perfect 与 music 目录下存在同名有效数据。")
 
@@ -203,7 +179,9 @@ def run_training(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = CNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128, bidirectional=bilstm).to(device)
+    sample_X, _, _, _, _name = ds[0]
+    feature_dim = int(sample_X.shape[1])
+    model = CNNLSTM2Head(input_dim=feature_dim, cnn_channels=64, hidden=128, bidirectional=bilstm).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
     pos_weight = compute_pos_weight_for_subset(ds, train_idx, instrumental)
@@ -242,12 +220,11 @@ def run_training(
 
         print(f"  best_hyst on={best_on} off={best_off} f1={best_hyst['f1']:.4f} precision={best_hyst['precision']:.4f} recall={best_hyst['recall']:.4f}")
 
-        # 仅迟滞用于选优与保存
         if best_hyst["f1"] > best_f1:
             best_f1 = best_hyst["f1"]
             cfg = {
                 "sr": SR,
-                "n_mels": N_MELS,
+                "feature_dim": int(feature_dim),
                 "hop_length": HOP_LENGTH,
                 "mode": mode,
                 "lambda1": float(lambda1),
@@ -258,10 +235,11 @@ def run_training(
                 "eval_hyst_on": best_on,
                 "eval_hyst_off": best_off,
                 "energy_thresh": float(energy_thresh),
+                "feature_type": "mul",
             }
             if save_path is None:
                 fname = (
-                    f"cnn_lstm_2task{'_bilstm' if bilstm else ''}_{'inst' if instrumental else 'vocal'}_epoch-{epoch}_lambda2-{lambda2}_energy-{energy_thresh}_ts-{run_ts}.pt"
+                    f"cnn_lstm_2task_mul_features{'_bilstm' if bilstm else ''}_{'inst' if instrumental else 'vocal'}_epoch-{epoch}_lambda2-{lambda2}_energy-{energy_thresh}_ts-{run_ts}.pt"
                 )
                 best_path = base_dir / fname
             else:
@@ -275,7 +253,7 @@ def run_training(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="训练 CNN+LSTM（支持人声或间奏模式）")
+    parser = argparse.ArgumentParser(description="训练 CNN+LSTM 多任务（多特征输入）")
     parser.add_argument("--labels-root", default=str(Path(".") / "labels_qrc"))
     parser.add_argument("--music-root", default=r"D:\meliris\music")
     parser.add_argument("--demucs-root", default=r"D:\ferry\Demucs-GUI_1.3.2_cuda_mkl\separated\htdemucs")
@@ -304,7 +282,7 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         lazy=args.lazy,
-        cache_dir=Path("./features_cache"),
+        cache_dir=Path("./features_cache_mul"),
         mode=args.mode,
         lambda1=args.lambda1,
         lambda2=args.lambda2,

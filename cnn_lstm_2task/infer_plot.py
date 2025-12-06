@@ -32,7 +32,7 @@ def format_time_ms(sec: float) -> str:
 
 
 class CNNLSTM2Head(nn.Module):
-    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128):
+    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128, bidirectional: bool = False):
         super().__init__()
         self.cnn = nn.Sequential(
             nn.Conv1d(1, 32, kernel_size=5, padding=2),
@@ -48,10 +48,11 @@ class CNNLSTM2Head(nn.Module):
             hidden_size=hidden,
             num_layers=1,
             batch_first=True,
-            bidirectional=False,
+            bidirectional=bidirectional,
         )
-        self.head_cls = nn.Linear(hidden, 1)
-        self.head_reg = nn.Linear(hidden, 1)
+        out_dim = hidden * (2 if bidirectional else 1)
+        self.head_cls = nn.Linear(out_dim, 1)
+        self.head_reg = nn.Linear(out_dim, 1)
 
     def forward(self, X: torch.Tensor):
         B, T, F = X.shape
@@ -66,11 +67,12 @@ class CNNLSTM2Head(nn.Module):
 
 def load_model(ckpt_path: Path):
     ckpt = torch.load(str(ckpt_path), map_location="cpu")
+    config = ckpt.get("config", {})
+    bilstm = bool(config.get("bilstm") or (str(config.get("rnn_type", "")).lower() == "bilstm") or config.get("bidirectional"))
     state = ckpt.get("model_state", ckpt)
-    model = CNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128)
+    model = CNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128, bidirectional=bilstm)
     model.load_state_dict(state, strict=False)
     model.eval()
-    config = ckpt.get("config", {})
     return model, config
 
 

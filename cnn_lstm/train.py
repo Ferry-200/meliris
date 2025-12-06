@@ -5,6 +5,7 @@ import math
 import random
 import argparse
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -46,10 +47,8 @@ def set_seed(seed: int = 42):
 
 
 class CNNLSTM(nn.Module):
-    """在频率维上做 1D CNN，之后接单层 LSTM 做时序分类。"""
-    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128):
+    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128, bidirectional: bool = False):
         super().__init__()
-        # 对每个时间帧的频谱列做 1D 卷积提取局部频率模式
         self.cnn = nn.Sequential(
             nn.Conv1d(1, 32, kernel_size=5, padding=2),
             nn.BatchNorm1d(32),
@@ -57,16 +56,17 @@ class CNNLSTM(nn.Module):
             nn.Conv1d(32, cnn_channels, kernel_size=5, padding=2),
             nn.BatchNorm1d(cnn_channels),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool1d(1),  # 汇聚到频率通道的全局特征
+            nn.AdaptiveAvgPool1d(1),
         )
         self.lstm = nn.LSTM(
             input_size=cnn_channels,
             hidden_size=hidden,
             num_layers=1,
             batch_first=True,
-            bidirectional=False,
+            bidirectional=bidirectional,
         )
-        self.head = nn.Linear(hidden, 1)
+        out_dim = hidden * (2 if bidirectional else 1)
+        self.head = nn.Linear(out_dim, 1)
 
     def forward(self, X: torch.Tensor):
         # X: [B, T, F]
@@ -148,6 +148,7 @@ def run_training(
     lazy: bool = True,
     cache_dir: Optional[Path] = Path("./features_cache"),
     mode: str = "vocal",
+    bilstm: bool = False,
     save_path: Optional[Path] = None,
     eval_hyst_on: Optional[float] = None,
     eval_hyst_off: Optional[float] = None,
@@ -187,18 +188,16 @@ def run_training(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = CNNLSTM(input_dim=N_MELS, cnn_channels=64, hidden=128).to(device)
+    model = CNNLSTM(input_dim=N_MELS, cnn_channels=64, hidden=128, bidirectional=bilstm).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
     pos_weight = compute_pos_weight_for_subset(ds, train_idx, instrumental)
     print(f"pos_weight={pos_weight:.2f} (mode={mode})")
 
     best_f1 = -1.0
-    if save_path is None:
-        default_name = "cnn_lstm_inst.pt" if instrumental else "cnn_lstm.pt"
-        best_path = Path(".") / default_name
-    else:
-        best_path = Path(save_path)
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    last_saved_path: Optional[Path] = None
+    base_dir = Path(".") if save_path is None else Path(save_path).parent
 
     for epoch in range(1, epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device, pos_weight=pos_weight)
@@ -226,15 +225,23 @@ def run_training(
                 "n_mels": N_MELS,
                 "hop_length": HOP_LENGTH,
                 "mode": mode,
+                "bilstm": bool(bilstm),
                 "eval_postproc": "hysteresis",
                 "eval_threshold": None,
                 "eval_hyst_on": best_on,
                 "eval_hyst_off": best_off,
             }
+            if save_path is None:
+                fname = f"cnn_lstm{'_bilstm' if bilstm else ''}_{'inst' if instrumental else 'vocal'}_epoch-{epoch}_lambda2-NA_energy-NA_ts-{run_ts}.pt"
+                best_path = base_dir / fname
+            else:
+                best_path = Path(save_path)
             torch.save({"model_state": model.state_dict(), "config": cfg}, best_path)
+            last_saved_path = best_path
             print(f"saved best to {best_path} (f1={best_f1:.4f}, postproc=hysteresis, on={best_on}, off={best_off})")
 
-    return {"best_f1": best_f1, "ckpt": str(best_path)}
+    final_ckpt = str(last_saved_path) if last_saved_path is not None else (str(Path(save_path)) if save_path is not None else "")
+    return {"best_f1": best_f1, "ckpt": final_ckpt}
 
 
 def main():
@@ -247,6 +254,7 @@ def main():
     parser.add_argument("--no-lazy", dest="lazy", action="store_false")
     parser.set_defaults(lazy=True)
     parser.add_argument("--mode", choices=["vocal", "instrumental"], default="instrumental")
+    parser.add_argument("--bilstm", action="store_true", default=False)
     parser.add_argument("--save-path", default=None)
     parser.add_argument("--eval-hyst-on", type=float, default=0.6)
     parser.add_argument("--eval-hyst-off", type=float, default=0.3)
@@ -262,6 +270,7 @@ def main():
         lazy=args.lazy,
         cache_dir=Path("./features_cache"),
         mode=args.mode,
+        bilstm=bool(args.bilstm),
         save_path=(Path(args.save_path) if args.save_path else None),
         eval_hyst_on=args.eval_hyst_on,
         eval_hyst_off=args.eval_hyst_off,
