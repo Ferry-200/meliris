@@ -5,12 +5,18 @@ description = "An Intelligent System for LRC Enhancement based on Vocal Detectio
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # metadata
     "mutagen>=1.46.0",
+    # audio processing, mel spectrogram
     "librosa>=0.10.1",
+    # machine learning
     "numpy>=1.23",
     "torch>=2.0",
     "tqdm>=4.64",
+    # visualization
     "matplotlib>=3.7",
-    "silero-vad>=6.2.0",
     "qqmusic-api-python>=0.3.6",
+    "onnxruntime>=1.23.2",
+    "onnxscript>=0.5.6",
+    "onnx>=1.20.0",
 ]
