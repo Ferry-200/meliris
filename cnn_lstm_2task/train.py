@@ -78,7 +78,7 @@ class CNNLSTM2Head(nn.Module):
         return logits_cls, logits_reg
 
 
-def train_one_epoch(model, loader, optimizer, device, pos_weight: Optional[float], instrumental: bool, lambda1: float, lambda2: float):
+def train_one_epoch(model, loader, optimizer, device, pos_weight: Optional[float], instrumental: bool, lambda1: float, lambda2: float, energy_thresh: float):
     model.train()
     total_loss = 0.0
     bce = nn.BCEWithLogitsLoss(
@@ -86,10 +86,11 @@ def train_one_epoch(model, loader, optimizer, device, pos_weight: Optional[float
         pos_weight=(torch.tensor([pos_weight], dtype=torch.float32, device=device) if pos_weight is not None else None),
     )
     mse = nn.MSELoss(reduction="none")
-    for X, y_vocal, y_ratio, mask, _, _ in tqdm(loader, desc="train", leave=False):
+    for X, y_vocal, y_ratio, energy, mask, _, _ in tqdm(loader, desc="train", leave=False):
         X = X.to(device)
         y_vocal = y_vocal.to(device)
         y_ratio = y_ratio.to(device)
+        energy = energy.to(device)
         mask = mask.to(device)
 
         logits_cls, logits_reg = model(X)
@@ -97,7 +98,7 @@ def train_one_epoch(model, loader, optimizer, device, pos_weight: Optional[float
         loss_cls = bce(logits_cls, y_cls)
         loss_cls = (loss_cls * mask).sum() / (mask.sum() + 1e-8)
         pred_ratio = torch.sigmoid(logits_reg)
-        mask_reg = mask * y_vocal
+        mask_reg = mask * y_vocal * (energy >= energy_thresh).float()
         loss_reg = mse(pred_ratio, y_ratio)
         loss_reg = (loss_reg * mask_reg).sum() / (mask_reg.sum() + 1e-8)
         loss = lambda1 * loss_cls + lambda2 * loss_reg
@@ -119,7 +120,7 @@ def collect_val_outputs(model, loader, device, instrumental: bool):
     y_flat: List[np.ndarray] = []
     probs_seqs: List[np.ndarray] = []
     y_seqs: List[np.ndarray] = []
-    for X, y_vocal, y_ratio, mask, _, _ in tqdm(loader, desc="collect", leave=False):
+    for X, y_vocal, y_ratio, energy, mask, _, _ in tqdm(loader, desc="collect", leave=False):
         X = X.to(device)
         y_vocal = y_vocal.to(device)
         mask = mask.to(device)
@@ -162,6 +163,7 @@ def run_training(
     save_path: Optional[Path] = None,
     eval_hyst_on: Optional[float] = None,
     eval_hyst_off: Optional[float] = None,
+    energy_thresh: float = 0.0,
 ):
     set_seed(42)
     assert mode in ("vocal", "instrumental"), "mode 仅支持 'vocal' 或 'instrumental'"
@@ -212,7 +214,17 @@ def run_training(
         best_path = Path(save_path)
 
     for epoch in range(1, epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, optimizer, device, pos_weight=pos_weight, instrumental=instrumental, lambda1=lambda1, lambda2=lambda2)
+        train_loss = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            device,
+            pos_weight=pos_weight,
+            instrumental=instrumental,
+            lambda1=lambda1,
+            lambda2=lambda2,
+            energy_thresh=energy_thresh,
+        )
 
         probs_flat, y_flat, probs_seqs, y_seqs, val_loss = collect_val_outputs(model, val_loader, device, instrumental)
         preds_05 = (probs_flat >= 0.5).astype(np.float32)
@@ -243,6 +255,7 @@ def run_training(
                 "eval_threshold": None,
                 "eval_hyst_on": best_on,
                 "eval_hyst_off": best_off,
+                "energy_thresh": float(energy_thresh),
             }
             torch.save({"model_state": model.state_dict(), "config": cfg}, best_path)
             print(f"saved best to {best_path} (f1={best_f1:.4f}, postproc=hysteresis, on={best_on}, off={best_off})")
@@ -255,8 +268,8 @@ def main():
     parser.add_argument("--labels-root", default=str(Path(".") / "labels_qrc"))
     parser.add_argument("--music-root", default=r"D:\meliris\music")
     parser.add_argument("--demucs-root", default=r"D:\ferry\Demucs-GUI_1.3.2_cuda_mkl\separated\htdemucs")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--lazy", action="store_true", default=True)
     parser.add_argument("--no-lazy", dest="lazy", action="store_false")
     parser.set_defaults(lazy=True)
@@ -266,6 +279,7 @@ def main():
     parser.add_argument("--save-path", default=None)
     parser.add_argument("--eval-hyst-on", type=float, default=0.6)
     parser.add_argument("--eval-hyst-off", type=float, default=0.3)
+    parser.add_argument("--energy-thresh", type=float, default=0.0)
     args = parser.parse_args()
 
     labels_root = Path(args.labels_root)
@@ -285,6 +299,7 @@ def main():
         save_path=(Path(args.save_path) if args.save_path else None),
         eval_hyst_on=args.eval_hyst_on,
         eval_hyst_off=args.eval_hyst_off,
+        energy_thresh=args.energy_thresh,
     )
     print("training done:", stats)
 

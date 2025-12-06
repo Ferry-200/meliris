@@ -219,30 +219,43 @@ class LazyMTLDataset(Dataset):
         else:
             X = load_mel(audio_path)
 
-        V_mel = load_mel(vocals_path)
-        I_mel = load_mel(inst_path)
-        T_min = min(X.shape[0], V_mel.shape[0], I_mel.shape[0])
+        yv, sr_v = librosa.load(str(vocals_path), sr=SR, mono=True)
+        yi, sr_i = librosa.load(str(inst_path), sr=SR, mono=True)
+        VS = librosa.feature.melspectrogram(y=yv, sr=sr_v, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS, power=2.0)
+        IS = librosa.feature.melspectrogram(y=yi, sr=sr_i, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS, power=2.0)
+        V_energy = VS.sum(axis=0)
+        I_energy = IS.sum(axis=0)
+        T_min = min(X.shape[0], V_energy.shape[0], I_energy.shape[0])
         X = X[:T_min]
-        V_energy = V_mel[:T_min].sum(axis=1)
-        I_energy = I_mel[:T_min].sum(axis=1)
+        V_energy = V_energy[:T_min]
+        I_energy = I_energy[:T_min]
         ratio = (V_energy / (V_energy + I_energy + 1e-8)).astype(np.float32)
+        energy_total = (V_energy + I_energy).astype(np.float32)
         y_vocal = labels_to_frame_targets(labels, T=T_min)
-        return torch.from_numpy(X.copy()), torch.from_numpy(y_vocal.copy()), torch.from_numpy(ratio.copy()), stem
+        return (
+            torch.from_numpy(X.copy()),
+            torch.from_numpy(y_vocal.copy()),
+            torch.from_numpy(ratio.copy()),
+            torch.from_numpy(energy_total.copy()),
+            stem,
+        )
 
 
 def collate_pad_mtl(batch):
-    names = [b[3] for b in batch]
+    names = [b[4] for b in batch]
     lengths = [b[0].shape[0] for b in batch]
     F = batch[0][0].shape[1]
     T_max = max(lengths)
     X_pad = torch.zeros((len(batch), T_max, F), dtype=torch.float32)
     y_vocal_pad = torch.zeros((len(batch), T_max), dtype=torch.float32)
     y_ratio_pad = torch.zeros((len(batch), T_max), dtype=torch.float32)
+    energy_pad = torch.zeros((len(batch), T_max), dtype=torch.float32)
     mask = torch.zeros((len(batch), T_max), dtype=torch.float32)
-    for i, (X, y_vocal, y_ratio, _) in enumerate(batch):
+    for i, (X, y_vocal, y_ratio, energy, _) in enumerate(batch):
         t = X.shape[0]
         X_pad[i, :t, :] = X
         y_vocal_pad[i, :t] = y_vocal
         y_ratio_pad[i, :t] = y_ratio
+        energy_pad[i, :t] = energy
         mask[i, :t] = 1.0
-    return X_pad, y_vocal_pad, y_ratio_pad, mask, names, lengths
+    return X_pad, y_vocal_pad, y_ratio_pad, energy_pad, mask, names, lengths
