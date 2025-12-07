@@ -144,7 +144,8 @@ def run_training(
     ds_full = LazySVDDatasetMulFeatures(labels_root=labels_root, music_root=music_root, cache_dir=cache_dir, instrumental=instrumental)
     if precache:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        for it_idx in range(len(ds_full)):
+        total = len(ds_full)
+        for it_idx in tqdm(range(total), desc="precache", leave=False):
             it = ds_full.items[it_idx]
             stem = it["name"]
             audio_path = it["audio_path"]
