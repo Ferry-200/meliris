@@ -14,9 +14,11 @@ from .data import (
     SVDDataset,
     LazySVDDataset,
     LazySVDDatasetMulFeatures,
+    WindowedLazySVDDatasetMulFeatures,
     collate_pad,
     LazyMTLDataset,
     LazyMTLDatasetMulFeatures,
+    WindowedLazyMTLDatasetMulFeatures,
     collate_pad_mtl,
 )
 from .postproc import (

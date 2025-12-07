@@ -5,6 +5,7 @@ import math
 import random
 import argparse
 from pathlib import Path
+import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -22,7 +23,8 @@ except Exception as e:
 
 from common import (
     SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC,
-    LazySVDDatasetMulFeatures, collate_pad,
+    load_features,
+    LazySVDDatasetMulFeatures, WindowedLazySVDDatasetMulFeatures, collate_pad,
     set_seed, collect_val_outputs, compute_pos_weight_for_subset,
     compute_metrics_from_arrays, grid_search_hysteresis, compute_hysteresis_metrics,
 )
@@ -127,48 +129,79 @@ def run_training(
     save_path: Optional[Path] = None,
     eval_hyst_on: Optional[float] = None,
     eval_hyst_off: Optional[float] = None,
+    num_workers: int = 0,
+    win_sec: float = 30.0,
+    precache: bool = False,
+    windowed: bool = False,
 ):
     set_seed(42)
+    try:
+        torch.set_num_threads(max(1, int(os.cpu_count() or 1)))
+    except Exception:
+        pass
     assert mode in ("vocal", "instrumental")
     instrumental = (mode == "instrumental")
-    ds = LazySVDDatasetMulFeatures(labels_root=labels_root, music_root=music_root, cache_dir=cache_dir, instrumental=instrumental)
-    if len(ds) == 0:
+    ds_full = LazySVDDatasetMulFeatures(labels_root=labels_root, music_root=music_root, cache_dir=cache_dir, instrumental=instrumental)
+    if precache:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for it_idx in range(len(ds_full)):
+            it = ds_full.items[it_idx]
+            stem = it["name"]
+            audio_path = it["audio_path"]
+            cache_file = cache_dir / f"{stem}.npy"
+            if cache_file.exists():
+                continue
+            Xf = load_features(audio_path)
+            try:
+                np.save(cache_file, Xf)
+            except Exception:
+                pass
+    if len(ds_full) == 0:
         raise RuntimeError("数据集为空：请确认 labels/perfect 与 music 目录下存在同名有效数据。")
+    win_frames = max(1, int(round(win_sec / HOP_SEC)))
+    ds_train = (
+        WindowedLazySVDDatasetMulFeatures(labels_root=labels_root, music_root=music_root, cache_dir=cache_dir, instrumental=instrumental, win_frames=win_frames)
+        if bool(windowed) else ds_full
+    )
 
-    indices = list(range(len(ds)))
+    indices = list(range(len(ds_train)))
     random.shuffle(indices)
     n_train = int(len(ds) * 0.9)
     train_idx = indices[:n_train]
     val_idx = indices[n_train:]
 
-    train_subset = torch.utils.data.Subset(ds, train_idx)
-    val_subset = torch.utils.data.Subset(ds, val_idx)
+    train_subset = torch.utils.data.Subset(ds_train, train_idx)
+    val_subset = torch.utils.data.Subset(ds_full, val_idx)
 
     use_cuda = torch.cuda.is_available()
     train_loader = DataLoader(
         train_subset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=int(num_workers),
         collate_fn=collate_pad,
-        pin_memory=use_cuda,
+        pin_memory=False,
+        persistent_workers=(int(num_workers) > 0),
+        prefetch_factor=(2 if int(num_workers) > 0 else None),
     )
     val_loader = DataLoader(
         val_subset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=int(num_workers),
         collate_fn=collate_pad,
-        pin_memory=use_cuda,
+        pin_memory=False,
+        persistent_workers=(int(num_workers) > 0),
+        prefetch_factor=(2 if int(num_workers) > 0 else None),
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    sample_X, _, _ = ds[0]
+    sample_X, _, _ = ds_train[0]
     feature_dim = int(sample_X.shape[1])
     model = CNNLSTM(input_dim=feature_dim, cnn_channels=64, hidden=128, bidirectional=bilstm).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
-    pos_weight = compute_pos_weight_for_subset(ds, train_idx, instrumental)
+    pos_weight = compute_pos_weight_for_subset(ds_full, train_idx, instrumental)
     print(f"pos_weight={pos_weight:.2f} (mode={mode})")
 
     best_f1 = -1.0
@@ -235,6 +268,10 @@ def main():
     parser.add_argument("--save-path", default=None)
     parser.add_argument("--eval-hyst-on", type=float, default=0.6)
     parser.add_argument("--eval-hyst-off", type=float, default=0.3)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--win-sec", type=float, default=30.0)
+    parser.add_argument("--precache", action="store_true", default=False)
+    parser.add_argument("--windowed", action="store_true", default=False)
     args = parser.parse_args()
 
     labels_root = Path(args.labels_root)
@@ -251,6 +288,10 @@ def main():
         save_path=(Path(args.save_path) if args.save_path else None),
         eval_hyst_on=args.eval_hyst_on,
         eval_hyst_off=args.eval_hyst_off,
+        num_workers=int(args.num_workers if args.num_workers is not None else max(0, (os.cpu_count() or 1) - 1)),
+        win_sec=float(args.win_sec),
+        precache=bool(args.precache),
+        windowed=bool(args.windowed),
     )
     print("training done:", stats)
 

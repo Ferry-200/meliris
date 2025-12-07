@@ -29,9 +29,9 @@ class CNNLSTM(nn.Module):
             hidden_size=hidden,
             num_layers=1,
             batch_first=True,
-            bidirectional=bidir
+            bidirectional=bidirectional
         )
-        out_dim = hidden * (2 if bidir else 1)
+        out_dim = hidden * (2 if bidirectional else 1)
         self.head = nn.Linear(out_dim, 1)
 
     def forward(self, X: torch.Tensor):

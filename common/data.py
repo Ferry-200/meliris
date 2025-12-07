@@ -401,6 +401,147 @@ class LazyMTLDatasetMulFeatures(Dataset):
         )
 
 
+class WindowedLazySVDDatasetMulFeatures(Dataset):
+    def __init__(self, labels_root: Path, music_root: Path, cache_dir: Optional[Path], instrumental: bool, win_frames: int):
+        self.items: List[Dict] = []
+        self.cache_dir = cache_dir
+        self.instrumental = instrumental
+        self.win_frames = int(win_frames)
+        perfect_root = labels_root / "perfect"
+        for p in perfect_root.glob("*.json"):
+            stem = p.stem
+            audio_path: Optional[Path] = None
+            for ext in AUDIO_EXTS_ORDER:
+                q = music_root / f"{stem}{ext}"
+                if q.exists():
+                    audio_path = q
+                    break
+            if audio_path is None:
+                continue
+            try:
+                labels = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                labels = []
+            self.items.append({"name": stem, "audio_path": audio_path, "labels": labels})
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx: int):
+        it = self.items[idx]
+        stem = it["name"]
+        audio_path: Path = it["audio_path"]
+        labels: List[Dict] = it["labels"]
+        if self.cache_dir is not None:
+            cache_file = self.cache_dir / f"{stem}.npy"
+            if cache_file.exists():
+                X_full = np.load(cache_file, mmap_mode="r")
+            else:
+                X_full = load_features(audio_path)
+                try:
+                    np.save(cache_file, X_full)
+                except Exception:
+                    pass
+        else:
+            X_full = load_features(audio_path)
+        T = X_full.shape[0]
+        wf = min(self.win_frames, T)
+        if T > wf:
+            s = int(np.random.randint(0, T - wf + 1))
+        else:
+            s = 0
+        e = s + wf
+        X = X_full[s:e]
+        y_full = labels_to_frame_targets(labels, T=T)
+        y = y_full[s:e]
+        if self.instrumental:
+            y = 1.0 - y
+        return torch.from_numpy(X.copy()), torch.from_numpy(y.copy()), stem
+
+
+class WindowedLazyMTLDatasetMulFeatures(Dataset):
+    def __init__(self, labels_root: Path, music_root: Path, demucs_root: Path, cache_dir: Optional[Path], win_frames: int):
+        self.items: List[Dict] = []
+        self.cache_dir = cache_dir
+        self.win_frames = int(win_frames)
+        perfect_root = labels_root / "perfect"
+        for p in perfect_root.glob("*.json"):
+            stem = p.stem
+            audio_path: Optional[Path] = None
+            for ext in AUDIO_EXTS_ORDER:
+                q = music_root / f"{stem}{ext}"
+                if q.exists():
+                    audio_path = q
+                    break
+            if audio_path is None:
+                continue
+            vocals_path = demucs_root / stem / "vocals.flac"
+            inst_path = demucs_root / stem / "no_vocals.flac"
+            if (not vocals_path.exists()) or (not inst_path.exists()):
+                continue
+            try:
+                labels = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                labels = []
+            self.items.append({
+                "name": stem,
+                "audio_path": audio_path,
+                "labels": labels,
+                "vocals_path": vocals_path,
+                "inst_path": inst_path,
+            })
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx: int):
+        it = self.items[idx]
+        stem = it["name"]
+        audio_path: Path = it["audio_path"]
+        labels: List[Dict] = it["labels"]
+        vocals_path: Path = it["vocals_path"]
+        inst_path: Path = it["inst_path"]
+        if self.cache_dir is not None:
+            cache_file = self.cache_dir / f"{stem}.npy"
+            if cache_file.exists():
+                X_full = np.load(cache_file, mmap_mode="r")
+            else:
+                X_full = load_features(audio_path)
+                try:
+                    np.save(cache_file, X_full)
+                except Exception:
+                    pass
+        else:
+            X_full = load_features(audio_path)
+        yv, sr_v = librosa.load(str(vocals_path), sr=SR, mono=True)
+        yi, sr_i = librosa.load(str(inst_path), sr=SR, mono=True)
+        VS = librosa.feature.melspectrogram(y=yv, sr=sr_v, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS, power=2.0)
+        IS = librosa.feature.melspectrogram(y=yi, sr=sr_i, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS, power=2.0)
+        V_energy = VS.sum(axis=0)
+        I_energy = IS.sum(axis=0)
+        T = min(X_full.shape[0], V_energy.shape[0], I_energy.shape[0])
+        wf = min(self.win_frames, T)
+        if T > wf:
+            s = int(np.random.randint(0, T - wf + 1))
+        else:
+            s = 0
+        e = s + wf
+        X = X_full[:T][s:e]
+        V_energy = V_energy[:T][s:e]
+        I_energy = I_energy[:T][s:e]
+        ratio = (V_energy / (V_energy + I_energy + 1e-8)).astype(np.float32)
+        energy_total = (V_energy + I_energy).astype(np.float32)
+        y_full = labels_to_frame_targets(labels, T=T)
+        y_vocal = y_full[s:e]
+        return (
+            torch.from_numpy(X.copy()),
+            torch.from_numpy(y_vocal.copy()),
+            torch.from_numpy(ratio.copy()),
+            torch.from_numpy(energy_total.copy()),
+            stem,
+        )
+
+
 def collate_pad_mtl(batch):
     names = [b[4] for b in batch]
     lengths = [b[0].shape[0] for b in batch]
