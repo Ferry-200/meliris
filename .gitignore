@@ -13,3 +13,7 @@ labels
 labels_qrc
 features_cache
 features_cache_mul
+
+# DALI dataset
+dali/DALI_v*
+labels_dali
