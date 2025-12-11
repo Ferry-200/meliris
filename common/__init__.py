@@ -13,12 +13,8 @@ from .data import (
     labels_to_frame_targets,
     SVDDataset,
     LazySVDDataset,
-    LazySVDDatasetMulFeatures,
-    WindowedLazySVDDatasetMulFeatures,
     collate_pad,
     LazyMTLDataset,
-    LazyMTLDatasetMulFeatures,
-    WindowedLazyMTLDatasetMulFeatures,
     collate_pad_mtl,
 )
 from .postproc import (

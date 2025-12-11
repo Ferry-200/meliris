@@ -17,3 +17,6 @@ features_cache_mul
 # DALI dataset
 dali/DALI_v*
 labels_dali
+
+# youtube cookies
+dali/www.youtube.com_cookies.txt
