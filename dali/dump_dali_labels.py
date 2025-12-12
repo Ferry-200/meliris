@@ -26,5 +26,4 @@ print(f"Total {len(dali_data)} entries")
 for dali_id in downloaded_ids:
     entry = dali_data[dali_id]
     print(f"Exporting {dali_id}")
-    path_save = 'D:\\meliris\\labels_dali'
-    entry.write_json(path_save, dali_id)
+    entry.write_json(dali_audios_output, dali_id)

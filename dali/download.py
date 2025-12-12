@@ -15,7 +15,7 @@ dali_info = dali_code.get_info(dali_data_path + '\\info\\DALI_DATA_INFO.gz')
  ['0f46aeae45ed4e6987f8b35e40d96c59' 'The_Killers-For_Reasons_Unknown'
   'TG5X4kOjEX8' 'True']]
 """
-dali_info = dali_info[0:1200]
+dali_info = dali_info[0:1300]
 
 dali_audios_output = "D:\\meliris\\dali\\DALI_v1.0_audios"
 
