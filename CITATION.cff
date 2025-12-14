@@ -1,14 +1,13 @@
 cff-version: 1.2.0
 message: "This work builds upon the DALI dataset, whose aligned lyrics annotation lines are used as weak vocal activity labels. If you use this repository or the DALI dataset, please cite the following paper."
-references:
-  - type: conference-paper
-    authors:
-      - family-names: Meseguer-Brocal
-        given-names: Gabriel
-      - family-names: Cohen-Hadria
-        given-names: Alice
-      - family-names: Peeters
-        given-names: Geoffroy
-    title: "DALI: a large Dataset of synchronized Audio, Lyrics and Notes, automatically created using teacher-student machine learning paradigm"
-    collection-title: "Proceedings of the 19th International Society for Music Information Retrieval Conference"
-    year: 2018
+authors:
+  - family-names: "Meseguer-Brocal"
+    given-names: "Gabriel"
+  - family-names: "Cohen-Hadria"
+    given-names: "Alice"
+  - family-names: "Peeters"
+    given-names: "Geoffroy"
+title: "DALI: a large Dataset of synchronized Audio, Lyrics and Notes, automatically created using teacher-student machine learning paradigm"
+version: 1.0.0
+doi: https://doi.org/10.5281/zenodo.1492443
+date-released: September 23-27, 2018
