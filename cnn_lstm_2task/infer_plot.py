@@ -19,6 +19,10 @@ from common.config import SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC
 from common.data import load_mel, labels_to_frame_targets
 from common.postproc import compute_metrics_from_arrays, apply_hysteresis_seq
 from common.export_utils import compute_frame_dur, build_hyst_segments, make_hyst_payload
+try:
+    import onnxruntime as ort
+except Exception:
+    ort = None
 
 
 # 与训练保持一致的特征参数从 common.config 读取
@@ -65,7 +69,32 @@ class CNNLSTM2Head(nn.Module):
         return logits_cls, logits_reg
 
 
+def _load_onnx_session(onnx_path: Path):
+    if ort is None:
+        raise RuntimeError("未安装 onnxruntime，无法加载 ONNX 模型")
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    meta = {}
+    try:
+        m = sess.get_modelmeta()
+        for kv in getattr(m, "custom_metadata_map", {}) or {}:
+            meta[kv] = m.custom_metadata_map[kv]
+        for kv in getattr(m, "metadata_props", []) or []:
+            if hasattr(kv, "key") and hasattr(kv, "value"):
+                meta[str(kv.key)] = str(kv.value)
+    except Exception:
+        meta = {}
+    config = {}
+    try:
+        if "config" in meta:
+            config = json.loads(meta["config"])
+    except Exception:
+        config = {}
+    return sess, config
+
 def load_model(ckpt_path: Path):
+    if ckpt_path.suffix.lower() == ".onnx":
+        sess, config = _load_onnx_session(ckpt_path)
+        return sess, config
     ckpt = torch.load(str(ckpt_path), map_location="cpu")
     config = ckpt.get("config", {})
     bilstm = bool(config.get("bilstm") or (str(config.get("rnn_type", "")).lower() == "bilstm") or config.get("bidirectional"))
@@ -76,7 +105,50 @@ def load_model(ckpt_path: Path):
     return model, config
 
 
-def run_infer(model: CNNLSTM2Head, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _sigmoid_np(a: np.ndarray) -> np.ndarray:
+    return (1.0 / (1.0 + np.exp(-a))).astype(np.float32)
+
+def _run_infer_onnx(sess, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    x = X.astype(np.float32)[None, :, :]
+    ins = sess.get_inputs()
+    input_name = ins[0].name
+    outputs = sess.run(None, {input_name: x})
+    probs_cls = None
+    probs_reg = None
+    if len(outputs) == 2:
+        o0 = np.array(outputs[0])
+        o1 = np.array(outputs[1])
+        o0 = np.squeeze(o0)
+        o1 = np.squeeze(o1)
+        if o0.ndim == 2 and o0.shape[-1] == 1:
+            o0 = o0[..., 0]
+        if o1.ndim == 2 and o1.shape[-1] == 1:
+            o1 = o1[..., 0]
+        probs_cls = o0
+        probs_reg = o1
+    # elif len(outputs) == 1:
+    #     o = np.array(outputs[0])
+    #     o = np.squeeze(o)
+    #     if o.ndim == 2 and o.shape[1] == 2:
+    #         probs_cls = o[:, 0]
+    #         probs_reg = o[:, 1]
+    #     else:
+    #         probs_cls = o
+    #         probs_reg = np.zeros_like(probs_cls, dtype=np.float32)
+    else:
+        raise RuntimeError("ONNX 模型输出不符合预期")
+
+    if np.nanmin(probs_cls) < 0.0 or np.nanmax(probs_cls) > 1.0:
+        probs_cls = _sigmoid_np(probs_cls.astype(np.float32))
+    if np.nanmin(probs_reg) < 0.0 or np.nanmax(probs_reg) > 1.0:
+        probs_reg = _sigmoid_np(probs_reg.astype(np.float32))
+    # probs_cls = (1.0 - probs_cls).astype(np.float32)
+    probs_reg = probs_reg.astype(np.float32)
+    return probs_cls, probs_reg
+
+def run_infer(model, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if ort is not None and hasattr(model, "run"):
+        return _run_infer_onnx(model, X)
     with torch.no_grad():
         logits_cls, logits_reg = model(torch.from_numpy(X).unsqueeze(0))
         probs_cls = torch.sigmoid(logits_cls).squeeze(0).cpu().numpy()
@@ -180,7 +252,7 @@ def main():
     has_label = labels is not None
 
     probs_cls, probs_ratio = run_infer(model, X)
-    mode = str(config.get("mode", "vocal"))
+    mode = str(config.get("mode", "instrumental"))
     inst_probs = probs_cls if mode == "instrumental" else (1.0 - probs_cls)
     inst_label = (1.0 - y_true) if has_label else np.zeros((T,), dtype=np.float32)
 

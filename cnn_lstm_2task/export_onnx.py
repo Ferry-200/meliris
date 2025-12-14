@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -10,7 +11,7 @@ from common.config import N_MELS
 
 
 class CNNLSTM2Head(nn.Module):
-    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128):
+    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128, bidirectional: bool = False):
         super().__init__()
         self.cnn = nn.Sequential(
             nn.Conv1d(1, 32, kernel_size=5, padding=2),
@@ -26,10 +27,11 @@ class CNNLSTM2Head(nn.Module):
             hidden_size=hidden,
             num_layers=1,
             batch_first=True,
-            bidirectional=False,
+            bidirectional=bidirectional,
         )
-        self.head_cls = nn.Linear(hidden, 1)
-        self.head_reg = nn.Linear(hidden, 1)
+        out_dim = hidden * (2 if bidirectional else 1)
+        self.head_cls = nn.Linear(out_dim, 1)
+        self.head_reg = nn.Linear(out_dim, 1)
 
     def forward(self, X: torch.Tensor):
         B, T, F = X.shape
@@ -44,13 +46,16 @@ class CNNLSTM2Head(nn.Module):
 
 def export_pt_to_onnx(ckpt: Path, out: Path | None, dummy_T: int, opset: int, dynamo: bool = False):
     ck = torch.load(str(ckpt), map_location="cpu")
+    config = ck.get("config", {})
+    bilstm = bool(config.get("bilstm") or (str(config.get("rnn_type", "")).lower() == "bilstm") or config.get("bidirectional"))
     state = ck.get("model_state", ck)
-    model = CNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128).to(torch.device("cpu"))
+    model = CNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128, bidirectional=bilstm).to(torch.device("cpu"))
     model.load_state_dict(state, strict=False)
     model.eval()
     if out is None:
         out = ckpt.with_suffix(".onnx")
-    dummy = torch.zeros((1, dummy_T, N_MELS), dtype=torch.float32)
+    n_mels = int(config.get("n_mels", N_MELS))
+    dummy = torch.zeros((1, dummy_T, n_mels), dtype=torch.float32)
     try:
         if dynamo:
             torch.onnx.export(
@@ -75,6 +80,8 @@ def export_pt_to_onnx(ckpt: Path, out: Path | None, dummy_T: int, opset: int, dy
                 dynamo=False,
             )
         print(f"已导出 ONNX: {out}")
+
+        json.dump(config, open(out.with_suffix(".json"), "w"), indent=4)
     except Exception as e:
         print(f"导出失败：{e}")
         print("若缺少依赖，请安装：python -m pip install onnx onnxscript")
