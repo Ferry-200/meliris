@@ -1,5 +1,23 @@
 # Meliris: An Intelligent System for LRC Enhancement based on Vocal Detection
 
+This work builds upon the **DALI dataset**, whose aligned lyrics annotation lines
+are used as weak vocal activity labels.
+
+```
+@inproceedings{
+  Meseguer-Brocal_2018,
+  Author = {Meseguer-Brocal, Gabriel and Cohen-Hadria, Alice and Peeters, Geoffroy},
+  Booktitle = {19th International Society for Music Information Retrieval Conference},
+  Editor = {ISMIR},
+  Month = {September},
+  Title = {DALI: a large Dataset of synchronized Audio, LyrIcs and notes, automatically created using teacher-student machine learning paradigm.},
+  Year = {2018}
+}
+```
+
+The DALI dataset is provided by its original authors and is subject to its own license and terms of use.
+Please refer to the official DALI dataset page for details. [The DALI dataset](https://zenodo.org/records/2577915)
+
 ## 模型方案设计
 
 ### 一、总体思路
