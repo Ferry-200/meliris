@@ -17,6 +17,7 @@ features_cache_mul
 # DALI dataset
 dali/DALI_v*
 labels_dali
+dali/map_with_NCC.json
 
 # youtube cookies
 dali/www.youtube.com_cookies.txt
