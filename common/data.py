@@ -30,7 +30,7 @@ def find_audio_by_stem(music_root: Path, stem: str) -> Optional[Path]:
 
 
 def load_mel(audio_path: Path) -> np.ndarray:
-    y, sr = librosa.load(str(audio_path), sr=SR, mono=True)
+    y, sr = librosa.load(str(audio_path), sr=SR, mono=True, res_type="fft")
     S = librosa.feature.melspectrogram(
         y=y,
         sr=sr,

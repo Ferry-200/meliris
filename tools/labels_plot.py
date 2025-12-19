@@ -31,6 +31,27 @@ def _estimate_T_from_labels(labels: List[Dict]) -> int:
     return max(1, int(np.ceil(last_end_sec / HOP_SEC)) + 1)
 
 
+def _compute_boundaries(labels: List[Dict]) -> List[float]:
+    """Collect unique boundary times (segment starts/ends) in seconds."""
+    boundaries: List[float] = []
+    for it in labels:
+        sm, ss = it["start"][0], float(it["start"][1])
+        em, es = it["end"][0], float(it["end"][1])
+        ssec = sm * 60.0 + ss
+        esec = em * 60.0 + es
+        boundaries.append(ssec)
+        boundaries.append(esec)
+    if not boundaries:
+        return []
+    boundaries.sort()
+    # Deduplicate with a small tolerance to handle float parsing.
+    uniq: List[float] = []
+    for b in boundaries:
+        if not uniq or abs(b - uniq[-1]) > 1e-6:
+            uniq.append(b)
+    return uniq
+
+
 def _collect_label_files(labels_root: Path) -> List[Path]:
     files: List[Path] = []
     for p in labels_root.glob("*.json"):
@@ -76,7 +97,7 @@ def main():
 
     fig, ax = plt.subplots(figsize=(12, 4))
     plt.subplots_adjust(bottom=0.2)
-    line_label, = ax.plot(times, y, label="label_binary")
+    line_label, = ax.plot(times, y, label="label_binary", zorder=2)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Label")
     ax.set_ylim(-0.05, 1.05)
@@ -139,7 +160,7 @@ def main():
             break
 
     def update_plot_data(new_json: Path):
-        nonlocal json_path, labels, T, times, y
+        nonlocal json_path, labels, T, times, y, boundary_spans
         json_path = new_json
         try:
             labels = json.loads(json_path.read_text(encoding="utf-8"))
@@ -153,6 +174,14 @@ def main():
         ax.set_xlim(times[0], times[-1] if len(times) > 0 else 1.0)
         title_text.set_text(f"{json_path.relative_to(labels_root)}")
         ann.set_visible(False)
+        # Refresh boundary spans
+        for sp in boundary_spans:
+            try:
+                sp.remove()
+            except Exception:
+                pass
+        boundary_spans = []
+        _add_boundary_spans()
         fig.canvas.draw_idle()
 
     ax_prev = plt.axes([0.15, 0.06, 0.08, 0.06])
@@ -176,6 +205,27 @@ def main():
 
     btn_prev.on_clicked(on_prev)
     btn_next.on_clicked(on_next)
+
+    # Add red separators (vertical spans) at label boundaries with width = one x-unit (HOP_SEC).
+    boundary_spans: List[mpl.patches.Polygon] = []
+
+    def _add_boundary_spans():
+        if len(times) == 0:
+            return
+        bounds = _compute_boundaries(labels)
+        if not bounds:
+            return
+        x_min = times[0]
+        x_max = times[-1]
+        for b in bounds:
+            left = max(x_min, b - HOP_SEC / 2)
+            right = min(x_max, b + HOP_SEC / 2)
+            if right <= left:
+                continue
+            sp = ax.axvspan(left, right, color="red", alpha=0.50, zorder=1)
+            boundary_spans.append(sp)
+
+    _add_boundary_spans()
 
     plt.show()
 

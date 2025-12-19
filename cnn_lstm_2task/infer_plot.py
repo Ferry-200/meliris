@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import numpy as np
 import torch
@@ -33,6 +33,27 @@ def format_time_ms(sec: float) -> str:
     m = int(sec // 60)
     s = sec - m * 60
     return f"{m:02d}:{s:06.3f}"
+
+
+def _compute_boundaries(labels: Optional[List[Dict]]) -> List[float]:
+    """Collect unique boundary times (segment starts/ends) in seconds."""
+    if not labels:
+        return []
+    boundaries: List[float] = []
+    for it in labels:
+        sm, ss = it.get("start", [0, 0])[0], float(it.get("start", [0, 0])[1])
+        em, es = it.get("end", [0, 0])[0], float(it.get("end", [0, 0])[1])
+        ssec = sm * 60.0 + ss
+        esec = em * 60.0 + es
+        boundaries.append(ssec)
+        boundaries.append(esec)
+    boundaries.sort()
+    # Deduplicate with a small tolerance
+    uniq: List[float] = []
+    for b in boundaries:
+        if not uniq or abs(b - uniq[-1]) > 1e-6:
+            uniq.append(b)
+    return uniq
 
 
 class CNNLSTM2Head(nn.Module):
@@ -263,9 +284,9 @@ def main():
     fig, ax = plt.subplots(figsize=(12, 6))
     plt.subplots_adjust(bottom=0.39)
     label_prob = "inst_prob (model p)" if mode == "instrumental" else "inst_prob (1 - vocal_p)"
-    line_inst_prob, = ax.plot(times, inst_probs, label=label_prob)
-    line_inst_true, = ax.plot(times, inst_label, label="inst_label")
-    line_inst_pred, = ax.plot(times, inst_pred, label="inst_pred")
+    line_inst_prob, = ax.plot(times, inst_probs, label=label_prob, zorder=2)
+    line_inst_true, = ax.plot(times, inst_label, label="inst_label", zorder=2)
+    line_inst_pred, = ax.plot(times, inst_pred, label="inst_pred", zorder=2)
     # ax.set_xlabel("Time (s)")
     ax.set_ylabel("Instrumental Probability / Binary")
     ax.set_ylim(-0.05, 1.05)
@@ -378,7 +399,7 @@ def main():
             break
 
     def update_plot_data(new_audio: Path):
-        nonlocal audio_path, stem, X, T, times, labels, y_true, has_label, inst_probs, inst_label
+        nonlocal audio_path, stem, X, T, times, labels, y_true, has_label, inst_probs, inst_label, boundary_spans
         audio_path = new_audio
         stem = audio_path.stem
         print(f"切换音频: {audio_path}")
@@ -413,6 +434,14 @@ def main():
         ax.set_xlim(times[0], times[-1] if len(times) > 0 else 1.0)
         title_text.set_text(f"{stem}")
         ann.set_visible(False)
+        # 刷新分隔带
+        for sp in boundary_spans:
+            try:
+                sp.remove()
+            except Exception:
+                pass
+        boundary_spans = []
+        _add_boundary_spans()
         recompute_and_update()
 
     ax_prev = plt.axes([0.15, 0.02, 0.08, 0.04])
@@ -436,6 +465,27 @@ def main():
 
     btn_prev.on_clicked(on_prev)
     btn_next.on_clicked(on_next)
+
+    # 在标签交界处绘制红色分隔带（宽度 = 一个横轴单位 HOP_SEC）
+    boundary_spans: List[Any] = []
+
+    def _add_boundary_spans():
+        if len(times) == 0:
+            return
+        bounds = _compute_boundaries(labels)
+        if not bounds:
+            return
+        x_min = times[0]
+        x_max = times[-1]
+        for b in bounds:
+            left = max(x_min, b - HOP_SEC / 2)
+            right = min(x_max, b + HOP_SEC / 2)
+            if right <= left:
+                continue
+            sp = ax.axvspan(left, right, color="red", alpha=0.50, zorder=1)
+            boundary_spans.append(sp)
+
+    _add_boundary_spans()
 
     # 导出按钮：将当前迟滞二值预测导出为 JSON
     ax_export = plt.axes([0.36, 0.02, 0.10, 0.04])
