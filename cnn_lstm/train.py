@@ -22,6 +22,7 @@ except Exception as e:
 
 
 # 共享配置与工具（抽取到 common 模块）
+from cnn_lstm.model import CNNLSTM
 from common import (
     SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC,
     SVDDataset, LazySVDDataset, collate_pad,
@@ -44,40 +45,6 @@ def set_seed(seed: int = 42):
 
 
 ## 数据集与 collate 函数已抽取至 common.data
-
-
-class CNNLSTM(nn.Module):
-    def __init__(self, input_dim: int, cnn_channels: int = 64, hidden: int = 128, bidirectional: bool = False):
-        super().__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv1d(1, 32, kernel_size=5, padding=2),
-            nn.BatchNorm1d(32),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(32, cnn_channels, kernel_size=5, padding=2),
-            nn.BatchNorm1d(cnn_channels),
-            nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool1d(1),
-        )
-        self.lstm = nn.LSTM(
-            input_size=cnn_channels,
-            hidden_size=hidden,
-            num_layers=1,
-            batch_first=True,
-            bidirectional=bidirectional,
-        )
-        out_dim = hidden * (2 if bidirectional else 1)
-        self.head = nn.Linear(out_dim, 1)
-
-    def forward(self, X: torch.Tensor):
-        # X: [B, T, F]
-        B, T, F = X.shape
-        x = X.reshape(B * T, 1, F)          # [B*T, 1, F]
-        x = self.cnn(x).squeeze(-1)         # [B*T, C]
-        x = x.reshape(B, T, -1)             # [B, T, C]
-        out, _ = self.lstm(x)               # [B, T, H]
-        logits = self.head(out).squeeze(-1) # [B, T]
-        return logits
-
 
 def train_one_epoch(model, loader, optimizer, device, pos_weight: Optional[float] = None):
     model.train()
