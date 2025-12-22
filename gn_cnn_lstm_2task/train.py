@@ -22,7 +22,7 @@ except Exception as e:
 
 
 # 共享配置与工具（抽取到 common 模块）
-from cnn_lstm_2task.model import CNNLSTM2Head
+from gn_cnn_lstm_2task.model import GNCNNLSTM2Head
 from common import (
     SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC,
     LazyMTLDataset, collate_pad_mtl,
@@ -130,20 +130,29 @@ def run_training(
     lambda1: float = 1.0,
     lambda2: float = 1.0,
     bilstm: bool = False,
+    gn_groups: int = 8,
+    lr: float = 1e-3,
+    seed: int = 42,
     save_path: Optional[Path] = None,
     eval_hyst_on: Optional[float] = None,
     eval_hyst_off: Optional[float] = None,
     energy_thresh: float = 0.0,
 ):
-    set_seed(42)
+    set_seed(seed)
     assert mode in ("vocal", "instrumental"), "mode 仅支持 'vocal' 或 'instrumental'"
     instrumental = (mode == "instrumental")
     ds = LazyMTLDataset(labels_root=labels_root, music_root=music_root, demucs_root=demucs_root, cache_dir=cache_dir)
+    print(f"数据集样本数：{len(ds)}")
+
     if len(ds) == 0:
         raise RuntimeError("数据集为空：请确认 labels/perfect 与 music 目录下存在同名有效数据。")
 
+    # 使样本顺序稳定（避免文件系统遍历顺序影响划分）
+    ds.items.sort(key=lambda it: str(it.get("name", "")))
+
     indices = list(range(len(ds)))
-    random.shuffle(indices)
+    rng = random.Random(seed)
+    rng.shuffle(indices)
     n_train = int(len(ds) * 0.9)
     train_idx = indices[:n_train]
     val_idx = indices[n_train:]
@@ -170,8 +179,8 @@ def run_training(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = CNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128, bidirectional=bilstm).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    model = GNCNNLSTM2Head(input_dim=N_MELS, cnn_channels=64, hidden=128, bidirectional=bilstm, gn_groups=gn_groups).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=float(lr), weight_decay=1e-4)
 
     pos_weight = compute_pos_weight_for_subset(ds, train_idx, instrumental)
     print(f"pos_weight={pos_weight:.2f} (mode={mode})")
@@ -220,6 +229,11 @@ def run_training(
                 "lambda1": float(lambda1),
                 "lambda2": float(lambda2),
                 "bilstm": bool(bilstm),
+                "norm": "gn",
+                "gn_groups": int(gn_groups),
+                "lr": float(lr),
+                "seed": int(seed),
+                "split": {"train_idx": train_idx, "val_idx": val_idx},
                 "eval_postproc": "hysteresis",
                 "eval_threshold": None,
                 "eval_hyst_on": best_on,
@@ -228,7 +242,7 @@ def run_training(
             }
             if save_path is None:
                 fname = (
-                    f"cnn_lstm_2task{'_bilstm' if bilstm else ''}_{'inst' if instrumental else 'vocal'}_epoch-{epoch}_lambda2-{lambda2}_energy-{energy_thresh}_ts-{run_ts}.pt"
+                    f"gn_cnn_lstm_2task{'_bilstm' if bilstm else ''}_{'inst' if instrumental else 'vocal'}_epoch-{epoch}_lambda2-{lambda2}_gn-{gn_groups}_lr-{lr}_energy-{energy_thresh}_ts-{run_ts}.pt"
                 )
                 best_path = base_dir / fname
             else:
@@ -255,6 +269,9 @@ def main():
     parser.add_argument("--bilstm", action="store_true", default=False)
     parser.add_argument("--lambda1", type=float, default=1.0)
     parser.add_argument("--lambda2", type=float, default=0.75)
+    parser.add_argument("--gn-groups", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save-path", default=None)
     parser.add_argument("--eval-hyst-on", type=float, default=0.6)
     parser.add_argument("--eval-hyst-off", type=float, default=0.3)
@@ -276,6 +293,9 @@ def main():
         lambda1=args.lambda1,
         lambda2=args.lambda2,
         bilstm=bool(args.bilstm),
+        gn_groups=int(args.gn_groups),
+        lr=float(args.lr),
+        seed=int(args.seed),
         save_path=(Path(args.save_path) if args.save_path else None),
         eval_hyst_on=args.eval_hyst_on,
         eval_hyst_off=args.eval_hyst_off,

@@ -217,7 +217,7 @@ class LazyMTLDataset(Dataset):
             try:
                 labels = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
-                labels = []
+                continue
             self.items.append({
                 "name": stem,
                 "audio_path": audio_path,
