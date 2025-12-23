@@ -43,40 +43,6 @@ def load_mel(audio_path: Path) -> np.ndarray:
     S_norm = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-8)
     return S_norm.T.astype(np.float32)  # [T, n_mels]
 
-
-def load_features(audio_path: Path) -> np.ndarray:
-    y, sr = librosa.load(str(audio_path), sr=SR, mono=True)
-    S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS, power=2.0)
-    S_db = librosa.power_to_db(S, ref=np.max)
-    S_norm = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-8)
-    mel = S_norm.T.astype(np.float32)
-    d1 = librosa.feature.delta(S_norm, order=1)
-    d2 = librosa.feature.delta(S_norm, order=2)
-    d1 = d1.T.astype(np.float32)
-    d2 = d2.T.astype(np.float32)
-    d1_max = float(np.max(np.abs(d1))) if d1.size > 0 else 1.0
-    d2_max = float(np.max(np.abs(d2))) if d2.size > 0 else 1.0
-    d1 = d1 / (d1_max + 1e-8)
-    d2 = d2 / (d2_max + 1e-8)
-    Xmag = np.abs(librosa.stft(y=y, n_fft=N_FFT, hop_length=HOP_LENGTH))
-    flat = librosa.feature.spectral_flatness(S=Xmag).squeeze().astype(np.float32)
-    harm, perc = librosa.decompose.hpss(Xmag)
-    he = harm.sum(axis=0)
-    pe = perc.sum(axis=0)
-    ratio = (he / (he + pe + 1e-8)).astype(np.float32)
-    zcr = librosa.feature.zero_crossing_rate(y=y, frame_length=N_FFT, hop_length=HOP_LENGTH).squeeze().astype(np.float32)
-    T_min = int(min(mel.shape[0], d1.shape[0], d2.shape[0], flat.shape[0], ratio.shape[0], zcr.shape[0]))
-    mel = mel[:T_min]
-    d1 = d1[:T_min]
-    d2 = d2[:T_min]
-    flat = flat[:T_min]
-    ratio = ratio[:T_min]
-    zcr = zcr[:T_min]
-    aux = np.stack([ratio, flat, zcr], axis=1).astype(np.float32)
-    X = np.concatenate([mel, d1, d2, aux], axis=1).astype(np.float32)
-    return X
-
-
 def labels_to_frame_targets(labels: List[Dict], T: int) -> np.ndarray:
     y = np.zeros((T,), dtype=np.float32)
     for item in labels:

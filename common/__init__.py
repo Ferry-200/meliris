@@ -9,7 +9,6 @@ from .config import SR, N_MELS, N_FFT, HOP_LENGTH, HOP_SEC, AUDIO_EXTS_ORDER
 from .data import (
     find_audio_by_stem,
     load_mel,
-    load_features,
     labels_to_frame_targets,
     SVDDataset,
     LazySVDDataset,
