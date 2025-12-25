@@ -143,6 +143,66 @@ def run_infer(model, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return probs_cls.astype(np.float32), probs_reg.astype(np.float32)
 
 
+def run_infer_sliding(
+    model,
+    X_full: np.ndarray,
+    *,
+    window_sec: float,
+    hop_sec: float,
+    weight: str = "hann",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sliding-window inference with overlap-add aggregation.
+
+    Returns per-frame probabilities aligned to X_full timeline.
+    """
+    T = int(X_full.shape[0])
+    if T <= 0:
+        return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.float32)
+
+    win_frames = max(1, int(round(float(window_sec) / HOP_SEC)))
+    hop_frames = max(1, int(round(float(hop_sec) / HOP_SEC)))
+
+    if weight == "hann":
+        w = np.hanning(win_frames).astype(np.float32)
+        # Avoid all-zeros for very small windows
+        if float(w.max()) <= 0:
+            w = np.ones((win_frames,), dtype=np.float32)
+        w = np.maximum(w, 1e-3)
+    else:
+        w = np.ones((win_frames,), dtype=np.float32)
+
+    acc_cls = np.zeros((T,), dtype=np.float32)
+    acc_reg = np.zeros((T,), dtype=np.float32)
+    acc_w = np.zeros((T,), dtype=np.float32)
+
+    # Ensure we cover the tail
+    starts = list(range(0, T, hop_frames))
+    if starts and (starts[-1] + win_frames < T):
+        starts.append(max(0, T - win_frames))
+
+    for s in starts:
+        e = s + win_frames
+        e_eff = min(e, T)
+        Xw = X_full[s:e_eff]
+        if Xw.shape[0] < win_frames:
+            pad = win_frames - int(Xw.shape[0])
+            Xw = np.pad(Xw, ((0, pad), (0, 0)), mode="constant")
+
+        p_cls_w, p_reg_w = run_infer(model, Xw)
+        # p_*_w are length win_frames
+        ww = w[: (e_eff - s)]
+        acc_cls[s:e_eff] += p_cls_w[: (e_eff - s)] * ww
+        acc_reg[s:e_eff] += p_reg_w[: (e_eff - s)] * ww
+        acc_w[s:e_eff] += ww
+
+    m = acc_w > 0
+    out_cls = np.zeros((T,), dtype=np.float32)
+    out_reg = np.zeros((T,), dtype=np.float32)
+    out_cls[m] = acc_cls[m] / acc_w[m]
+    out_reg[m] = acc_reg[m] / acc_w[m]
+    return out_cls.astype(np.float32), out_reg.astype(np.float32)
+
+
 def filter_short_runs(pred: np.ndarray, min_frames: int) -> np.ndarray:
     arr = pred.astype(np.float32).copy()
     n = arr.shape[0]
@@ -180,6 +240,9 @@ def main():
     parser.add_argument("--audio-path", default=None, help="指定音频绝对路径，优先于 stem/candidates")
     parser.add_argument("--ckpt", default=str(Path(__file__).resolve().parent.parent / "cnn_lstm_2task_inst.pt"), help="模型权重路径")
     parser.add_argument("--export-json", default=None, help="导出初始 inst_pred_hyst 为 JSON（需启用迟滞）")
+    parser.add_argument("--sliding", action="store_true", default=False, help="使用滑窗推理并融合（改善边界对齐，较慢）")
+    parser.add_argument("--sliding-window-sec", type=float, default=5.0, help="滑窗推理窗口长度（秒）")
+    parser.add_argument("--sliding-hop-sec", type=float, default=1.0, help="滑窗推理步长（秒）")
     args = parser.parse_args()
 
     music_root = Path(args.music_root)
@@ -238,7 +301,16 @@ def main():
     y_true = labels_to_frame_targets(labels or [], T)
     has_label = labels is not None
 
-    probs_cls, probs_ratio = run_infer(model, X)
+    if args.sliding:
+        probs_cls, probs_ratio = run_infer_sliding(
+            model,
+            X,
+            window_sec=float(args.sliding_window_sec),
+            hop_sec=float(args.sliding_hop_sec),
+            weight="hann",
+        )
+    else:
+        probs_cls, probs_ratio = run_infer(model, X)
     mode = str(config.get("mode", "instrumental"))
     inst_probs = probs_cls if mode == "instrumental" else (1.0 - probs_cls)
     inst_label = (1.0 - y_true) if has_label else np.zeros((T,), dtype=np.float32)
@@ -265,7 +337,7 @@ def main():
     txt = ax.text(0.01, 1.02, f"Precision: {p:.3f}  |  Recall: {r:.3f}  |  F1: {f1:.3f}", transform=ax.transAxes)
 
     pos = ax.get_position()
-    ax_ratio = plt.axes([pos.x0, 0.21, pos.width, 0.17], sharex=ax)
+    ax_ratio = plt.axes((pos.x0, 0.21, pos.width, 0.17), sharex=ax)
     line_ratio_pred, = ax_ratio.plot(times, probs_ratio, color="tab:orange")
     ax_ratio.set_ylabel("Ratio")
     ax_ratio.set_ylim(-0.05, 1.05)
@@ -274,7 +346,7 @@ def main():
     # ax_ratio.legend(loc="upper right")
     ax_ratio.set_xlim(ax.get_xlim())
 
-    ax_th = plt.axes([0.15, 0.12, 0.7, 0.03])
+    ax_th = plt.axes((0.15, 0.12, 0.7, 0.03))
     s_th = Slider(ax_th, "threshold", 0.0, 1.0, valinit=0.5, valstep=0.01)
 
     on_init = config.get("eval_hyst_on", None)
@@ -287,12 +359,12 @@ def main():
     th_on0 = float(on_init) if isinstance(on_init, (int, float)) else 0.5
     th_off0 = float(off_init) if isinstance(off_init, (int, float)) else max(0.0, 0.5 - 0.2)
 
-    ax_on = plt.axes([0.15, 0.07, 0.32, 0.03])
-    ax_off = plt.axes([0.53, 0.07, 0.32, 0.03])
+    ax_on = plt.axes((0.15, 0.07, 0.32, 0.03))
+    ax_off = plt.axes((0.53, 0.07, 0.32, 0.03))
     s_on = Slider(ax_on, "th_on", 0.0, 1.0, valinit=th_on0, valstep=0.01)
     s_off = Slider(ax_off, "th_off", 0.0, 1.0, valinit=th_off0, valstep=0.01)
-    ax_chk = plt.axes([0.90, 0.07, 0.10, 0.10])
-    chk = CheckButtons(ax_chk, ["hysteresis", "filter<500ms"], [use_hyst, filter_short])
+    ax_chk = plt.axes((0.89, 0.07, 0.11, 0.10))
+    chk = CheckButtons(ax_chk, ["hysteresis", "filter<1s"], [use_hyst, filter_short])
 
     # 若指定导出路径，按初始迟滞参数导出 inst_pred_hyst
     if args.export_json:
@@ -321,7 +393,7 @@ def main():
             pred = (inst_probs >= float(s_th.val)).astype(np.float32)
             line_inst_pred.set_label("inst_pred")
         if filter_short:
-            min_frames = max(1, int(math.ceil(0.500 / HOP_SEC)))
+            min_frames = max(1, int(math.ceil(1 / HOP_SEC)))
             pred = filter_short_runs(pred, min_frames)
             line_inst_pred.set_label(f"{line_inst_pred.get_label()}+filt")
         current_pred = pred.astype(np.float32)
@@ -345,7 +417,7 @@ def main():
         nonlocal use_hyst, filter_short
         if label == "hysteresis":
             use_hyst = not use_hyst
-        elif label == "filter<500ms":
+        elif label == "filter<1s":
             filter_short = not filter_short
         recompute_and_update()
 
@@ -387,7 +459,16 @@ def main():
                 labels = None
         y_true = labels_to_frame_targets(labels or [], T)
         has_label = labels is not None
-        probs2_cls, probs2_ratio = run_infer(model, X)
+        if args.sliding:
+            probs2_cls, probs2_ratio = run_infer_sliding(
+                model,
+                X,
+                window_sec=float(args.sliding_window_sec),
+                hop_sec=float(args.sliding_hop_sec),
+                weight="hann",
+            )
+        else:
+            probs2_cls, probs2_ratio = run_infer(model, X)
         inst_probs = probs2_cls if mode == "instrumental" else (1.0 - probs2_cls)
         line_ratio_pred.set_xdata(times)
         line_ratio_pred.set_ydata(probs2_ratio)
@@ -410,8 +491,8 @@ def main():
         _add_boundary_spans()
         recompute_and_update()
 
-    ax_prev = plt.axes([0.15, 0.02, 0.08, 0.04])
-    ax_next = plt.axes([0.25, 0.02, 0.08, 0.04])
+    ax_prev = plt.axes((0.15, 0.02, 0.08, 0.04))
+    ax_next = plt.axes((0.25, 0.02, 0.08, 0.04))
     btn_prev = Button(ax_prev, "Prev")
     btn_next = Button(ax_next, "Next")
 
@@ -454,7 +535,7 @@ def main():
     _add_boundary_spans()
 
     # 导出按钮：将当前迟滞二值预测导出为 JSON
-    ax_export = plt.axes([0.36, 0.02, 0.10, 0.04])
+    ax_export = plt.axes((0.36, 0.02, 0.10, 0.04))
     btn_export = Button(ax_export, "Export")
 
     def on_export(event):

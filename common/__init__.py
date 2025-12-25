@@ -16,6 +16,10 @@ from .data import (
     LazyMTLDataset,
     collate_pad_mtl,
 )
+from .windowed_data import (
+    LazyWindowedMTLDataset,
+    WindowTypeBatchSampler,
+)
 from .postproc import (
     compute_metrics_from_arrays,
     apply_hysteresis_seq,

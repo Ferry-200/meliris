@@ -16,7 +16,7 @@ except Exception as e:
 
 from .config import HOP_SEC
 from .data import LazySVDDataset, LazyMTLDataset, labels_to_frame_targets
-
+from .windowed_data import LazyWindowedMTLDataset
 
 def set_seed(seed: int = 42):
     import random
@@ -107,6 +107,36 @@ def compute_pos_weight_for_subset(ds: Dataset, indices: List[int], instrumental:
                 y = 1.0 - y
             pos += float(y.sum())
             total += float(T)
+    elif isinstance(ds, (LazyWindowedMTLDataset)):
+        # Windowed dataset: compute per-window frames directly (fixed length)
+        win_frames = max(1, int(round(float(ds.window_sec) / HOP_SEC)))
+        for i in indices:
+            it = ds.items[i]
+            labels: List[Dict] = it["labels"]
+            w0_sec = float(it["w0_sec"])
+            start_idx_raw = int(round(w0_sec / HOP_SEC))
+            end_idx_raw = start_idx_raw + win_frames
+
+            if end_idx_raw <= 0:
+                y = np.zeros((win_frames,), dtype=np.float32)
+            else:
+                left_pad = max(0, -start_idx_raw)
+                start_idx = max(0, start_idx_raw)
+                end_idx = max(start_idx, end_idx_raw)
+
+                # build y only up to end_idx (never negative)
+                y_full = labels_to_frame_targets(labels, T=end_idx)
+                y = y_full[start_idx:end_idx]
+                if left_pad > 0:
+                    y = np.pad(y, (left_pad, 0), mode="constant")
+                if y.shape[0] < win_frames:
+                    y = np.pad(y, (0, win_frames - y.shape[0]), mode="constant")
+                elif y.shape[0] > win_frames:
+                    y = y[:win_frames]
+            if instrumental:
+                y = 1.0 - y
+            pos += float(y.sum())
+            total += float(win_frames)
     else:
         for i in indices:
             s = ds.samples[i]
